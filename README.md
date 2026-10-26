@@ -9,8 +9,14 @@ It's an installable web app (Add to Home Screen on iPhone or Android), backed by
 - **Lobbies** with 4-letter codes and share links; rejoin from any device with "That's me"
 - **Teams:** 2–8 teams, pick your own or randomize, rename teams, late joiners can hop in mid-game
 - **Custom challenges:** paste any list (one per line), save packs, or use the built-in campus pack; more challenges than squares → random board every game
-- **Board sizes** 3×3, 4×4, 5×5
-- **Win conditions:** N bingos, N squares, or majority of the board — plus optional time limit (most squares wins)
+- **Board sizes** 3×3 up to 7×7
+- **Game modes:**
+  - **Bingo** — classic lockout; win by N bingos, N squares, or majority
+  - **Points** — lockout, but each challenge is worth 1–5 points (tap challenges in the lobby to set them); first to a target or most points
+  - **Rush** — no lockout: every team can do every square once, and the first team to finish a square earns double
+  - Optional **bingo bonus** (+N points per completed line) and **bounties** (every 10/15/20/30 min a random open square is worth double until claimed)
+  - Points games end on their own once nobody can catch the leader
+- **Time limit** (optional): most squares/points wins when it runs out
 - **Video proof** for every square: in-app camera (auto-compressed 720p, max 60s) or upload from the camera roll
 - **Lockout:** the database guarantees one owner per square — simultaneous claims can't both win
 - **Live scoreboard, feed, and notifications** for every claim

@@ -51,8 +51,11 @@ create table if not exists public.submissions (
   status     text not null default 'active' check (status in ('active','rejected')),
   created_at timestamptz not null default now()
 );
--- Lockout rule: only one live claim per square.
-create unique index if not exists submissions_one_owner on public.submissions (game_id, square) where status = 'active';
+-- Lockout rule: one live claim per square per "lane". Lockout modes put every claim in lane 0
+-- (so a square has one owner); Rush gives each team its own lane (each team can do each square once).
+alter table public.submissions add column if not exists lane int not null default 0;
+drop index if exists public.submissions_one_owner;
+create unique index if not exists submissions_one_claim on public.submissions (game_id, square, lane) where status = 'active';
 create index if not exists submissions_game on public.submissions (game_id);
 
 create table if not exists public.contests (
@@ -121,5 +124,7 @@ drop policy if exists "lockout clips read" on storage.objects;
 create policy "lockout clips read" on storage.objects
   for select to anon, authenticated
   using (bucket_id = 'clips');
+
+notify pgrst, 'reload schema';
 
 select 'Lockout is set up ✅' as result;

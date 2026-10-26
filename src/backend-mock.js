@@ -30,7 +30,7 @@ function violates(d, table, row, selfId) {
   if (table === 'players')
     return others.some((r) => r.game_id === row.game_id && (r.client_id === row.client_id || r.name.toLowerCase() === row.name.toLowerCase()));
   if (table === 'submissions')
-    return row.status === 'active' && others.some((r) => r.game_id === row.game_id && r.square === row.square && r.status === 'active');
+    return row.status === 'active' && others.some((r) => r.game_id === row.game_id && r.square === row.square && (r.lane || 0) === (row.lane || 0) && r.status === 'active');
   if (table === 'contests') return others.some((r) => r.submission_id === row.submission_id);
   return false;
 }
@@ -38,7 +38,7 @@ function violates(d, table, row, selfId) {
 const DEFAULTS = {
   games: { status: 'lobby', settings: {}, challenges: [], team_names: [], board: null, pending_winner: null, winner: null },
   players: { team: null },
-  submissions: { status: 'active', video_path: null, thumb_path: null },
+  submissions: { status: 'active', video_path: null, thumb_path: null, lane: 0 },
   contests: { status: 'open' },
   votes: {},
 };

@@ -1,12 +1,15 @@
 import { html, render, useState, useEffect, useRef } from './h.js';
 import { backend, CLIENT_ID, useGameData, useNow, applyAction, go } from './core.js';
-import { decide } from './logic.js';
+import { decide, setMinuteMs } from './logic.js';
 import { MOCK, rememberGame } from './util.js';
 import { Home, JoinGate, SetupNeeded, Logo } from './home.js';
 import { Lobby } from './lobby.js';
 import { Game, useNotifications } from './game.js';
 import { Recap } from './recap.js';
 import { Toaster } from './ui.js';
+
+// Test hook (demo mode only): ?mock&fastbounty makes bounty "minutes" last one second.
+if (MOCK && new URLSearchParams(location.search).has('fastbounty')) setMinuteMs(1000);
 
 const parseHash = () => {
   const m = location.hash.match(/^#\/g\/([A-Za-z]{4,6})/);

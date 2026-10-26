@@ -64,13 +64,19 @@ export function Seg({ value, options, onChange, disabled }) {
   </div>`;
 }
 
-export function Stepper({ value, min, max, onChange, disabled, suffix = '' }) {
+export function Stepper({ value, min, max, onChange, disabled, suffix = '', step = 1, fmt, label = '' }) {
   return html`<div class="stepper">
-    <button disabled=${disabled || value <= min} onClick=${() => onChange(value - 1)} aria-label="Decrease">−</button>
-    <span>${value}${suffix}</span>
-    <button disabled=${disabled || value >= max} onClick=${() => onChange(value + 1)} aria-label="Increase">+</button>
+    <button disabled=${disabled || value <= min} onClick=${() => onChange(Math.max(min, value - step))} aria-label=${`Decrease ${label}`.trim()}>−</button>
+    <span class=${fmt ? 'wide' : ''}>${fmt ? fmt(value) : value}${suffix}</span>
+    <button disabled=${disabled || value >= max} onClick=${() => onChange(Math.min(max, value + step))} aria-label=${`Increase ${label}`.trim()}>+</button>
   </div>`;
 }
+
+export function Switch({ on, onChange, label }) {
+  return html`<button class="switch" role="switch" aria-checked=${!!on} aria-label=${label} onClick=${() => onChange(!on)}><span></span></button>`;
+}
+
+export const PointChip = ({ v, small }) => html`<span class=${`pchip p${Math.min(5, v)} ${small ? 'small' : ''}`}>${v}</span>`;
 
 export const TeamDot = ({ team, size = 10 }) =>
   html`<span class="tdot" style=${`--tc:${team.color};width:${size}px;height:${size}px`}></span>`;

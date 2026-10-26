@@ -1,6 +1,6 @@
 import { html, useState, useMemo } from './h.js';
 import { CLIENT_ID, rematch, joinGame, go, toast } from './core.js';
-import { derive, teamInfo, winningLines, ts } from './logic.js';
+import { derive, teamInfo, ts, MODE_INFO } from './logic.js';
 import { store, clock, stamp } from './util.js';
 import { Icon } from './icons.js';
 import { Thumb, Confetti, Empty } from './ui.js';
@@ -16,17 +16,18 @@ export function Recap({ data, me, refresh }) {
   const [busy, setBusy] = useState(false);
   const isHost = game.host_id === CLIENT_ID;
   const winner = game.winner != null ? teamInfo(game, game.winner) : null;
-  const lines = useMemo(() => new Set(winningLines(d.settings, d.active, game.winner).flat()), [data.at]);
+  const lines = useMemo(() => new Set((game.winner != null && !d.rush ? d.stats[game.winner]?.lineList || [] : []).flat()), [data.at]);
   const duration = game.finished_at && game.started_at ? clock(ts(game.finished_at) - ts(game.started_at)) : null;
 
   const reasonText = {
-    condition: 'hit the goal',
-    time: 'had the most squares when time ran out',
-    full: 'had the most squares on a full board',
+    condition: d.pointsMode ? `reached ${d.settings.target} points` : 'hit the goal',
+    clinch: 'locked it up — nobody could catch them',
+    time: `had the most ${d.pointsMode ? 'points' : 'squares'} when time ran out`,
+    full: `had the most ${d.pointsMode ? 'points' : 'squares'} once the board was done`,
     host: 'were ahead when the host ended it',
   }[game.end_reason] || 'won';
 
-  const standings = [...d.stats].sort((a, b) => b.squares - a.squares || b.lines - a.lines);
+  const standings = [...d.stats].sort((a, b) => (d.pointsMode ? b.points - a.points : 0) || b.squares - a.squares || b.lines - a.lines);
   const timeline = useMemo(() => [...submissions].filter((s) => s.video_path || s.status === 'active').sort((a, b) => ts(a.created_at) - ts(b.created_at)), [data.at]);
   const byTeam = useMemo(() => [...timeline].sort((a, b) => a.team - b.team || ts(a.created_at) - ts(b.created_at)), [timeline]);
   const list = view === 'time' ? timeline : byTeam;
@@ -62,7 +63,7 @@ export function Recap({ data, me, refresh }) {
   return html`<main class="page recap">
     <${Confetti} colors=${colors} />
     <header class="recap-hero" style=${winner ? `--tc:${winner.color};--ti:${winner.ink}` : ''}>
-      <p class="eyebrow">Game ${game.code} · final${duration ? ` · ${duration}` : ''}</p>
+      <p class="eyebrow">Game ${game.code} · ${MODE_INFO[d.settings.mode].label} · final${duration ? ` · ${duration}` : ''}</p>
       ${winner
         ? html`<h1 class="display"><${Icon.crown} size=${30} /> ${winner.name} wins!</h1><p>${winner.name} ${reasonText}.</p>`
         : html`<h1 class="display">It’s a tie!</h1><p>Nobody pulled ahead.</p>`}
@@ -84,7 +85,9 @@ export function Recap({ data, me, refresh }) {
           return html`<li style=${`--tc:${t.color};--ti:${t.ink}`}>
             <span class="place">${i + 1}</span>
             <div class="grow"><b>${t.name}</b><p class="muted small">${members || '—'}</p></div>
-            <span class="st-num">${st.squares}<small> sq · ${st.lines} bingo${st.lines === 1 ? '' : 's'}</small></span>
+            ${d.pointsMode
+              ? html`<span class="st-num">${st.points}<small> pts · ${st.squares} sq</small></span>`
+              : html`<span class="st-num">${st.squares}<small> sq · ${st.lines} bingo${st.lines === 1 ? '' : 's'}</small></span>`}
           </li>`;
         })}
       </ol>
@@ -92,10 +95,10 @@ export function Recap({ data, me, refresh }) {
 
     <section class="card">
       <h2 class="h2">Final board</h2>
-      <${Board} game=${game} d=${d} highlight=${lines}
+      <${Board} game=${game} d=${d} highlight=${lines} perspective=${game.winner ?? me?.team}
         onTap=${(i) => {
-          const s = d.owner.get(i);
-          if (s) setViewer({ list: [s], index: 0 });
+          const cs = d.claimsBySquare.get(i) || [];
+          if (cs.length) setViewer({ list: cs.map((c) => c.sub), index: 0 });
         }} />
     </section>
 
@@ -117,7 +120,7 @@ export function Recap({ data, me, refresh }) {
               return html`<div class="clip-card">
                 <${Thumb} sub=${s} team=${t} badge=${s.status === 'rejected' ? '❌' : null} onClick=${() => setViewer({ list, index: i })} />
                 <p class="clip-title">${ch}</p>
-                <p class="muted tiny"><span class="tdot" style=${`--tc:${t.color}`}></span> ${t.name}${p ? ` · ${p.name}` : ''} · ${stamp(s.created_at, game.started_at)}</p>
+                <p class="muted tiny"><span class="tdot" style=${`--tc:${t.color}`}></span> ${t.name}${p ? ` · ${p.name}` : ''} · ${stamp(s.created_at, game.started_at)}${d.pointsMode && d.claimBySub.get(s.id) ? ` · +${d.claimBySub.get(s.id).value}` : ''}${d.claimBySub.get(s.id)?.bounty ? ' 💰' : ''}</p>
               </div>`;
             })}
           </div>`}

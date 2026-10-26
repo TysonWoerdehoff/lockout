@@ -91,7 +91,7 @@ with sync_playwright() as pw:
     # Carol contests, Dan votes not legit -> thrown out
     carol.locator('.sq').nth(0).click()
     carol.locator('video.video').wait_for(timeout=8000)
-    carol.get_by_role('button', name='Contest this clip').click()
+    carol.get_by_role('button', name=re.compile('^Contest')).click()
     carol.get_by_label("What’s wrong with it? (optional)").fill('That was a leaf, not a red thing')
     carol.get_by_role('button', name='Open contest').click()
     carol.locator('.contest-box').wait_for(timeout=6000)

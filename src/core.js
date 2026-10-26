@@ -3,7 +3,7 @@ import { supabaseBackend } from './backend-supabase.js';
 import { mockBackend } from './backend-mock.js';
 import { createUploader } from './uploads.js';
 import { MOCK, store, clientId, makeCode, extFor, rememberGame } from './util.js';
-import { DEFAULT_SETTINGS, normalizeSettings, makeBoard, fillTeams, leader, teamStats } from './logic.js';
+import { DEFAULT_SETTINGS, normalizeSettings, makeBoard, fillTeams, currentLeader } from './logic.js';
 
 const cfg = window.LOCKOUT_CONFIG || {};
 export const backend = MOCK ? mockBackend() : cfg.supabaseUrl && cfg.supabaseKey ? supabaseBackend(cfg) : null;
@@ -37,6 +37,7 @@ export function toast(msg, opts = {}) {
 function friendlyError(msg) {
   const m = String(msg || '');
   if (/failed to fetch|networkerror|load failed|network request failed/i.test(m)) return 'Can’t reach the server — check your connection and try again.';
+  if (/\blane\b/i.test(m)) return 'Rush mode needs a quick database update — run the latest setup.sql in Supabase.';
   if (/schema cache|does not exist|relation .* not/i.test(m)) return 'The database isn’t set up yet — run setup.sql in the Supabase SQL Editor.';
   if (/row-level security|permission denied/i.test(m)) return 'The database blocked that — re-run setup.sql in the Supabase SQL Editor.';
   return m;
@@ -215,7 +216,10 @@ export async function startGame(data, challenges, liveSettings) {
 
 export async function claimSquare(data, me, square, rec) {
   const { game } = data;
-  const r = await backend.insert('submissions', { game_id: game.id, square, team: me.team, player_id: me.id, status: 'active' });
+  const row = { game_id: game.id, square, team: me.team, player_id: me.id, status: 'active' };
+  // Rush: each team gets its own "lane" per square, so several teams can claim it (needs the lane column).
+  if (normalizeSettings(game.settings).mode === 'rush') row.lane = me.team;
+  const r = await backend.insert('submissions', row);
   if (r.conflict) return { conflict: true };
   const id = r.data.id;
   await uploader.enqueue({
@@ -260,9 +264,7 @@ export async function hostRule(contest, outcome) {
 }
 
 export async function endGameNow(data) {
-  const settings = normalizeSettings(data.game.settings);
-  const active = data.submissions.filter((s) => s.status === 'active');
-  const lead = leader(teamStats(settings, active));
+  const lead = currentLeader(data.game, data.submissions, data.contests);
   await backend.update(
     'games',
     { status: 'finished', winner: lead >= 0 ? lead : null, end_reason: 'host', finished_at: iso(Date.now()), pending_winner: null },

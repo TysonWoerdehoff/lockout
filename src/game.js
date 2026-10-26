@@ -1,9 +1,9 @@
 import { html, useState, useEffect, useRef, useMemo } from './h.js';
 import { CLIENT_ID, uploader, useBus, toast, claimSquare, openContest, castVote, hostRule, endGameNow, go, backend } from './core.js';
-import { derive, teamInfo, contestTally, describeWin, eligibleVoters, CONTEST_SECONDS, ts } from './logic.js';
+import { derive, teamInfo, contestTally, describeWin, eligibleVoters, CONTEST_SECONDS, ts, normalizeSettings, pointsFor, BOUNTY_MULT, MODE_INFO } from './logic.js';
 import { store, clock, ago, vibrate } from './util.js';
 import { Icon } from './icons.js';
-import { Sheet, TeamDot, Thumb, Video, Empty } from './ui.js';
+import { Sheet, TeamDot, Thumb, Video, Empty, PointChip } from './ui.js';
 import { Recorder, useVideoPicker, canRecord } from './recorder.js';
 import { ClipViewer } from './clips.js';
 import { shareInvite } from './lobby.js';
@@ -26,11 +26,12 @@ export function useNotifications(data, me) {
     prev.current = cur;
     if (!p || game.status !== 'active') return;
     const subById = new Map(submissions.map((s) => [s.id, s]));
+    const rush = normalizeSettings(game.settings).mode === 'rush';
     const label = (s) => `“${short(game.board?.[s.square])}”`;
     for (const s of submissions) {
       if (p.subs.has(s.id) || s.player_id === me.id) continue;
       const t = teamInfo(game, s.team);
-      toast(`${t.name} locked ${label(s)}`, { color: t.color });
+      toast(`${t.name} ${rush ? 'finished' : 'locked'} ${label(s)}`, { color: t.color });
       vibrate(30);
     }
     for (const c of contests) {
@@ -42,12 +43,13 @@ export function useNotifications(data, me) {
         vibrate([60, 40, 60]);
       }
       if (old === 'open' && c.status !== 'open') {
-        toast(c.status === 'rejected' ? `❌ ${label(s)} got thrown out — square’s open again` : `✅ ${label(s)} stands`, { kind: c.status === 'rejected' ? 'bad' : 'ok' });
+        toast(c.status === 'rejected' ? `❌ ${teamInfo(game, s.team).name}’s ${label(s)} got thrown out${rush ? '' : ' — square’s open again'}` : `✅ ${label(s)} stands`, { kind: c.status === 'rejected' ? 'bad' : 'ok' });
       }
     }
     if (p.pending === null && cur.pending !== null) {
       const t = cur.pending >= 0 ? teamInfo(game, cur.pending) : null;
-      toast(t ? `🏁 ${t.name} hit the goal — review time!` : '🏁 Review time!', { color: t?.color, ms: 5000 });
+      const what = game.pending_reason === 'clinch' ? 'clinched it' : game.pending_reason === 'condition' ? 'hit the goal' : 'is in the lead';
+      toast(t ? `🏁 ${t.name} ${what} — review time!` : '🏁 Review time!', { color: t?.color, ms: 5000 });
       vibrate([100, 60, 100, 60, 200]);
     }
   }, [data.at]);
@@ -89,6 +91,23 @@ export function Game({ data, me, refresh, now }) {
 
   const openViewer = (list, index) => setViewer({ list, index });
 
+  // Bounty alert when a new one starts (time-driven, so it lives here rather than in useNotifications).
+  const bk = d.bounty?.current?.k ?? null;
+  const prevBk = useRef(undefined);
+  useEffect(() => {
+    if (prevBk.current !== undefined && bk != null && bk !== prevBk.current && game.status === 'active') {
+      toast(`💰 Bounty! “${short(game.board?.[d.bounty.current.square])}” is worth double`, { kind: 'warn', ms: 6000 });
+      vibrate([80, 50, 80]);
+    }
+    prevBk.current = bk;
+  }, [bk]);
+
+  const hint = [
+    d.paused ? 'Game paused for review' : d.rush ? 'Every team can do every square' : 'Tap a square to claim it with a video',
+    describeWin(d.settings),
+  ];
+  if (d.bounty?.nextAt && !d.paused && game.status === 'active') hint.push(`next bounty in ${clock(d.bounty.nextAt - now)}`);
+
   let timer;
   if (game.ends_at) {
     const left = ts(game.ends_at) - now;
@@ -112,8 +131,8 @@ export function Game({ data, me, refresh, now }) {
 
     ${tab === 'board' &&
     html`<section class="board-wrap">
-      <${Board} game=${game} d=${d} highlight=${highlight} onTap=${setOpenSq} dim=${d.paused} />
-      <p class="hint center">${d.paused ? 'Game paused for review' : 'Tap a square to claim it with a video'} · ${describeWin(d.settings)}</p>
+      <${Board} game=${game} d=${d} highlight=${highlight} onTap=${setOpenSq} dim=${d.paused} perspective=${me.team} />
+      <p class="hint center">${hint.join(' · ')}</p>
     </section>`}
     ${tab === 'feed' && html`<${Feed} data=${data} d=${d} me=${me} list=${claimList} openViewer=${openViewer} now=${now} />`}
     ${tab === 'teams' && html`<${TeamsTab} data=${data} d=${d} me=${me} refresh=${refresh} />`}
@@ -143,15 +162,19 @@ export function Game({ data, me, refresh, now }) {
       <div class="stack">
         <button class="btn" onClick=${() => shareInvite(game)}><${Icon.share} size=${18} /> Invite more players</button>
         <dl class="facts">
+          <div><dt>Mode</dt><dd>${MODE_INFO[d.settings.mode].label}</dd></div>
           <div><dt>To win</dt><dd>${describeWin(d.settings)}</dd></div>
+          ${d.pointsMode && html`<div><dt>Bingo bonus</dt><dd>${d.settings.bingoBonus ? `+${d.settings.bingoBonus}` : 'Off'}</dd></div>`}
+          ${d.pointsMode && html`<div><dt>Bounties</dt><dd>${d.settings.bounty.on ? `Every ${d.settings.bounty.every} min` : 'Off'}</dd></div>`}
           <div><dt>Board</dt><dd>${d.settings.size}×${d.settings.size}</dd></div>
           <div><dt>Time limit</dt><dd>${d.settings.timeLimitMin ? `${d.settings.timeLimitMin} min` : 'None'}</dd></div>
           <div><dt>Review window</dt><dd>${d.settings.reviewSecs}s</dd></div>
         </dl>
+        ${d.pointsMode && html`<p class="hint">${MODE_INFO[d.settings.mode].blurb}</p>`}
         <details class="details"><summary>How to play</summary>${RULES}</details>
         ${isHost &&
         html`<button class="btn danger" onClick=${async () => {
-          if (!confirm('End the game now? The team with the most squares wins.')) return;
+          if (!confirm(`End the game now? The team with the most ${d.pointsMode ? 'points' : 'squares'} wins.`)) return;
           await endGameNow(data);
           setMenu(false);
           refresh();
@@ -163,39 +186,54 @@ export function Game({ data, me, refresh, now }) {
 }
 
 function Scoreboard({ game, d, me }) {
-  const top = Math.max(...d.stats.map((s) => s.squares));
+  const key = d.pointsMode ? 'points' : 'squares';
+  const top = Math.max(...d.stats.map((s) => s[key]));
+  const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
   return html`<div class="scores" role="list">
     ${d.stats.map((st) => {
       const t = teamInfo(game, st.team);
-      const lead = st.squares > 0 && st.squares === top;
-      const sub = d.target.type === 'lines' ? `${st.lines}/${d.target.n} bingo${d.target.n === 1 ? '' : 's'}` : `of ${d.target.n}`;
-      return html`<div role="listitem" class=${`score ${me.team === st.team ? 'mine' : ''}`} style=${`--tc:${t.color};--ti:${t.ink}`}>
+      const lead = st[key] > 0 && st[key] === top;
+      let sub;
+      if (d.pointsMode) {
+        if (d.settings.target) sub = `of ${d.settings.target} pts`;
+        else if (d.settings.bingoBonus) sub = `pts · ${plural(st.lines, 'bingo')}`;
+        else sub = `pts · ${st.squares} sq`;
+      } else sub = d.target.type === 'lines' ? `${st.lines}/${d.target.n} bingo${d.target.n === 1 ? '' : 's'}` : `of ${d.target.n}`;
+      return html`<div role="listitem" class=${`score ${me.team === st.team ? 'mine' : ''}`} style=${`--tc:${t.color};--ti:${t.ink}`}
+        aria-label=${`${t.name}: ${d.pointsMode ? plural(st.points, 'point') : plural(st.squares, 'square')}`}>
         <span class="score-name">${lead ? html`<${Icon.crown} size=${12} />` : ''}${t.name}</span>
-        <span class="score-num">${st.squares}</span>
+        <span class="score-num">${st[key]}</span>
         <span class="score-sub">${sub}</span>
       </div>`;
     })}
   </div>`;
 }
 
-export function Board({ game, d, highlight = new Set(), onTap, dim }) {
+export function Board({ game, d, highlight = new Set(), onTap, dim, perspective }) {
   const n = d.settings.size;
-  return html`<div class=${`board ${dim ? 'dim' : ''}`} style=${`--n:${n}`} data-size=${n}>
+  const bountySq = d.bounty?.current?.square;
+  return html`<div class=${`board ${dim ? 'dim' : ''} ${d.pointsMode ? 'pts' : ''}`} style=${`--n:${n}`} data-size=${n}>
     ${(game.board || []).map((text, i) => {
-      const sub = d.owner.get(i);
-      const team = sub ? teamInfo(game, sub.team) : null;
-      const contest = sub ? d.contestBySub.get(sub.id) : null;
+      const claims = d.claimsBySquare.get(i) || [];
+      const fill = d.rush ? claims.find((c) => c.team === perspective) || null : claims[0] || null;
+      const team = fill ? teamInfo(game, fill.team) : null;
+      const sub = fill?.sub;
+      const contestOpen = claims.some((c) => d.contestBySub.get(c.sub.id)?.status === 'open');
       const up = sub && !sub.video_path ? uploader?.status(sub.id) : null;
-      const cls = ['sq', sub ? 'claimed' : '', highlight.has(i) ? 'hl' : '', text.length > 28 ? 'long' : '', text.length > 48 ? 'xlong' : ''].join(' ');
+      const isBounty = bountySq === i;
+      const base = d.pointsMode ? pointsFor(d.settings, text) : 0;
+      const cls = ['sq', fill ? 'claimed' : '', highlight.has(i) ? 'hl' : '', isBounty ? 'bounty' : '', text.length > 28 ? 'long' : '', text.length > 48 ? 'xlong' : ''].join(' ');
       let badge = null;
-      if (sub) {
-        if (contest?.status === 'open') badge = html`<span class="sq-badge warn"><${Icon.scale} size=${11} /></span>`;
-        else if (!sub.video_path) badge = html`<span class="sq-badge">${up ? `${Math.round((up.pct || 0) * 100)}%` : html`<${Icon.hourglass} size=${10} />`}</span>`;
-        else badge = html`<span class="sq-badge"><${Icon.play} size=${10} /></span>`;
-      }
+      if (contestOpen) badge = html`<span class="sq-badge warn"><${Icon.scale} size=${11} /></span>`;
+      else if (sub && !sub.video_path) badge = html`<span class="sq-badge">${up ? `${Math.round((up.pct || 0) * 100)}%` : html`<${Icon.hourglass} size=${10} />`}</span>`;
+      else if (sub) badge = html`<span class="sq-badge"><${Icon.play} size=${10} /></span>`;
+      const who = claims.map((c) => teamInfo(game, c.team).name).join(', ');
       return html`<button key=${i} class=${cls} style=${team ? `--tc:${team.color};--ti:${team.ink}` : ''} onClick=${() => onTap?.(i)}
-        aria-label=${`${text}${team ? `, locked by ${team.name}` : ', open'}`}>
-        <span class="sq-txt">${text}</span>${badge}
+        aria-label=${`${text}${d.pointsMode ? `, ${base} point${base === 1 ? '' : 's'}` : ''}${isBounty ? ', bounty: double points' : ''}${who ? `, done by ${who}` : ', open'}`}>
+        ${d.pointsMode && html`<span class=${`sq-pts ${isBounty ? 'x2' : ''}`}>${isBounty ? `💰${base * BOUNTY_MULT}` : base}</span>`}
+        <span class="sq-txt">${text}</span>
+        ${d.rush && claims.length > 0 && html`<span class="sq-dots">${claims.map((c) => html`<i class=${c.first ? 'first' : ''} style=${`--dc:${teamInfo(game, c.team).color}`}></i>`)}</span>`}
+        ${badge}
       </button>`;
     })}
   </div>`;
@@ -212,10 +250,10 @@ function Banners({ data, d, me, now, refresh, onOpenSquare, onReview }) {
     const left = ts(game.finalize_at) - now;
     const openCount = contests.filter((c) => c.status === 'open').length;
     const waitingUpload = pw >= 0 && submissions.some((s) => s.status === 'active' && s.team === pw && !s.video_path);
-    const headline =
-      game.pending_reason === 'condition' ? `${t?.name} hit the goal!` : game.pending_reason === 'time' ? 'Time’s up!' : 'Board’s full!';
+    const reasonHead = { condition: `${t?.name} hit the goal!`, clinch: `${t?.name} clinched it!`, time: 'Time’s up!', full: 'Board’s done!' };
+    const headline = reasonHead[game.pending_reason] || 'Review time!';
     const sub =
-      game.pending_reason === 'condition' ? '' : t ? ` ${t.name} leads.` : ' It’s a tie so far.';
+      game.pending_reason === 'condition' ? '' : game.pending_reason === 'clinch' ? ' Nobody can catch them.' : t ? ` ${t.name} leads.` : ' It’s a tie so far.';
     let status;
     if (left > 0) status = html`<b class="mono">${clock(left)}</b> to contest`;
     else if (openCount) status = `Waiting on ${openCount} contest${openCount === 1 ? '' : 's'}…`;
@@ -229,6 +267,19 @@ function Banners({ data, d, me, now, refresh, onOpenSquare, onReview }) {
       </div>
       ${pw >= 0 && html`<button class="btn small light" onClick=${() => onReview(pw)}>Review</button>`}
     </div>`);
+  }
+
+  const bc = d.bounty?.current;
+  if (bc && game.status === 'active' && !d.paused) {
+    const text = game.board?.[bc.square] ?? '';
+    const base = pointsFor(d.settings, text);
+    const mineDone = d.rush && (d.claimsBySquare.get(bc.square) || []).some((c) => c.team === me.team);
+    out.push(html`<button class="banner bounty" onClick=${() => onOpenSquare(bc.square)}>
+      <span class="bounty-ico" aria-hidden="true">💰</span>
+      <div class="grow"><b>Bounty: “${short(text, 44)}”</b>
+        <p>${mineDone ? 'Your team already did this one' : `Worth ${base * BOUNTY_MULT} instead of ${base}`} · ${clock(bc.endAt - now)} left</p></div>
+      <${Icon.chevR} size=${18} />
+    </button>`);
   }
 
   for (const c of contests) {
@@ -280,14 +331,12 @@ function Banners({ data, d, me, now, refresh, onOpenSquare, onReview }) {
 
 // ---------------- square detail / claim / contest ----------------
 function SquareSheet({ data, d, me, square, onClose, refresh, now }) {
-  const { game, players, contests, votes } = data;
+  const { game } = data;
   const text = game.board?.[square] ?? '';
-  const sub = d.owner.get(square);
+  const claims = d.claimsBySquare.get(square) || [];
   const [rec, setRec] = useState(null);
   const [recording, setRecording] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [contesting, setContesting] = useState(false);
-  const [reason, setReason] = useState('');
   const [previewUrl, setPreviewUrl] = useState(null);
   const [picker, pick] = useVideoPicker(
     (r) => setRec(r),
@@ -305,20 +354,26 @@ function SquareSheet({ data, d, me, square, onClose, refresh, now }) {
   const hasTeam = me.team != null && me.team < d.settings.teamCount;
   const myTeam = hasTeam ? teamInfo(game, me.team) : null;
   const active = game.status === 'active';
+  const mine = claims.find((c) => c.team === me.team);
+  const taken = d.rush ? !!mine : claims.length > 0;
   let blocker = null;
   if (!active) blocker = 'The game is over.';
   else if (d.paused) blocker = 'Game is paused for review — hang tight.';
   else if (d.timeUp) blocker = 'Time’s up!';
   else if (!hasTeam) blocker = 'Pick a team first.';
 
+  const base = pointsFor(d.settings, text);
+  const isBounty = d.bounty?.current?.square === square;
+  const worth = base * (d.rush && claims.length === 0 ? 2 : 1) * (isBounty ? BOUNTY_MULT : 1);
+
   async function lockIn() {
     setBusy(true);
     try {
       const r = await claimSquare(data, me, square, rec);
       if (r.conflict) {
-        toast('Too slow — another team locked it first 😬', { kind: 'bad', ms: 5000 });
+        toast(d.rush ? 'A teammate already finished this one.' : 'Too slow — another team locked it first 😬', { kind: 'bad', ms: 5000 });
       } else {
-        toast('Locked in! Uploading your clip…', { color: myTeam.color });
+        toast(d.pointsMode ? `Locked in for ${worth} pt${worth === 1 ? '' : 's'}! Uploading your clip…` : 'Locked in! Uploading your clip…', { color: myTeam.color });
         vibrate([30, 40, 30]);
       }
       setRec(null);
@@ -329,6 +384,78 @@ function SquareSheet({ data, d, me, square, onClose, refresh, now }) {
     } finally {
       setBusy(false);
     }
+  }
+
+  if (recording) {
+    return html`<${Recorder}
+      onDone=${(r) => { setRec(r); setRecording(false); }}
+      onCancel=${() => setRecording(false)}
+      onUseUpload=${() => { setRecording(false); pick(); }} />${picker}`;
+  }
+
+  let status;
+  if (d.rush) status = claims.length ? `${claims.length}/${d.settings.teamCount} teams done` : 'nobody yet';
+  else status = claims.length ? 'locked' : 'open';
+  const ruleHint = d.rush
+    ? claims.length === 0
+      ? 'First team to finish it earns double. Every team can do it once.'
+      : `Already done by ${claims.length} team${claims.length === 1 ? '' : 's'} — you can still score it.`
+    : 'First team to lock it in owns it.';
+
+  const claimUI = rec
+    ? html`<div class="stack">
+        <video class="video" src=${previewUrl} controls playsinline autoplay muted></video>
+        <p class="muted small">Check your clip. Once you lock it in, it’s posted for everyone.</p>
+        ${blocker && html`<p class="note bad">${blocker}</p>`}
+        <div class="row">
+          <button class="btn ghost" onClick=${() => setRec(null)} disabled=${busy}>Retake</button>
+          <button class="btn big grow team-btn" style=${myTeam ? `--tc:${myTeam.color};--ti:${myTeam.ink}` : ''}
+            onClick=${lockIn} disabled=${busy || !!blocker}>
+            <${Icon.lock} size=${18} /> ${busy ? 'Locking…' : d.pointsMode ? `Lock it in · ${worth} pt${worth === 1 ? '' : 's'}` : 'Lock it in'}
+          </button>
+        </div>
+      </div>`
+    : blocker
+    ? html`<p class="note">${blocker}</p>`
+    : html`<div class="stack">
+        ${canRecord() &&
+        html`<button class="btn big team-btn" style=${`--tc:${myTeam.color};--ti:${myTeam.ink}`} onClick=${() => setRecording(true)}>
+          <${Icon.camera} size=${20} /> Record proof
+        </button>`}
+        <button class=${`btn ${canRecord() ? 'ghost' : 'big'}`} onClick=${pick}><${Icon.upload} size=${18} /> Upload a video</button>
+        <p class="muted small center">${ruleHint} Clips can be up to 60 seconds.</p>
+      </div>`;
+
+  return html`<${Sheet} open onClose=${() => !busy && onClose()} title="">
+    <p class="eyebrow sq-eyebrow">Square ${square + 1} · ${status}
+      ${d.pointsMode && html`<span class="worth"><${PointChip} v=${base} small /> ${base === 1 ? 'point' : 'points'}</span>`}</p>
+    <h2 class="challenge">${text}</h2>
+    ${isBounty && html`<p class="note bounty">💰 Bounty — worth double for the next ${clock(d.bounty.current.endAt - now)}.</p>`}
+    ${!taken && html`${d.pointsMode && !rec && !blocker && html`<p class="worth-now">Worth <b>${worth}</b> pt${worth === 1 ? '' : 's'} right now${d.rush && claims.length === 0 ? ' (first team bonus)' : ''}</p>`}${claimUI}`}
+    ${rec && taken && html`<p class="note bad">${d.rush ? 'A teammate finished this while you were filming — no need to post yours.' : `${teamInfo(game, claims[0].team).name} locked this while you were filming 😬`}</p>`}
+    ${d.rush && claims.length > 0 && html`<h4 class="eyebrow claims-label">Done by</h4>`}
+    ${claims.map((c) => html`<${ClaimBlock} key=${c.sub.id} claim=${c} data=${data} d=${d} me=${me} now=${now} refresh=${refresh} />`)}
+    ${picker}
+  </${Sheet}>`;
+}
+
+function ClaimBlock({ claim, data, d, me, now, refresh }) {
+  const { game, players, contests } = data;
+  const sub = claim.sub;
+  const [contesting, setContesting] = useState(false);
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+  const team = teamInfo(game, sub.team);
+  const player = players.find((p) => p.id === sub.player_id);
+  const contest = contests.find((c) => c.submission_id === sub.id);
+  const up = !sub.video_path ? uploader?.status(sub.id) : null;
+  const hasTeam = me.team != null && me.team < d.settings.teamCount;
+  const canContest = game.status === 'active' && hasTeam && me.team !== sub.team && !contest;
+  const tags = [];
+  if (d.pointsMode) {
+    tags.push(`+${claim.value} pt${claim.value === 1 ? '' : 's'}`);
+    if (d.rush && claim.first) tags.push('⚡ first');
+    if (claim.bounty) tags.push('💰 bounty');
   }
 
   async function submitContest() {
@@ -346,58 +473,13 @@ function SquareSheet({ data, d, me, square, onClose, refresh, now }) {
     }
   }
 
-  if (recording) {
-    return html`<${Recorder}
-      onDone=${(r) => { setRec(r); setRecording(false); }}
-      onCancel=${() => setRecording(false)}
-      onUseUpload=${() => { setRecording(false); pick(); }} />${picker}`;
-  }
-
-  // ---- open square ----
-  if (!sub) {
-    return html`<${Sheet} open onClose=${() => !busy && onClose()} title="">
-      <p class="eyebrow">Square ${square + 1} · open</p>
-      <h2 class="challenge">${text}</h2>
-      ${rec
-        ? html`<div class="stack">
-            <video class="video" src=${previewUrl} controls playsinline autoplay muted></video>
-            <p class="muted small">Check your clip. Once you lock it in, it’s posted for everyone.</p>
-            ${blocker && html`<p class="note bad">${blocker}</p>`}
-            <div class="row">
-              <button class="btn ghost" onClick=${() => setRec(null)} disabled=${busy}>Retake</button>
-              <button class="btn big grow team-btn" style=${myTeam ? `--tc:${myTeam.color};--ti:${myTeam.ink}` : ''}
-                onClick=${lockIn} disabled=${busy || !!blocker}>
-                <${Icon.lock} size=${18} /> ${busy ? 'Locking…' : 'Lock it in'}
-              </button>
-            </div>
-          </div>`
-        : blocker
-        ? html`<p class="note">${blocker}</p>`
-        : html`<div class="stack">
-            ${canRecord() &&
-            html`<button class="btn big team-btn" style=${`--tc:${myTeam.color};--ti:${myTeam.ink}`} onClick=${() => setRecording(true)}>
-              <${Icon.camera} size=${20} /> Record proof
-            </button>`}
-            <button class=${`btn ${canRecord() ? 'ghost' : 'big'}`} onClick=${pick}><${Icon.upload} size=${18} /> Upload a video</button>
-            <p class="muted small center">First team to lock it in owns it. Clips can be up to 60 seconds.</p>
-          </div>`}
-      ${picker}
-    </${Sheet}>`;
-  }
-
-  // ---- claimed square ----
-  const team = teamInfo(game, sub.team);
-  const player = players.find((p) => p.id === sub.player_id);
-  const contest = contests.find((c) => c.submission_id === sub.id);
-  const up = !sub.video_path ? uploader?.status(sub.id) : null;
-  const canContest = active && hasTeam && me.team !== sub.team && !contest;
-
-  return html`<${Sheet} open onClose=${onClose} title="">
-    <div class="claim-head" style=${`--tc:${team.color};--ti:${team.ink}`}>
-      <${Icon.lock} size=${14} /> ${team.name}${player ? ` · ${player.name}` : ''} · ${ago(sub.created_at, now)}
+  return html`<div class="claim-block">
+    <div class="row wrap">
+      <div class="claim-head" style=${`--tc:${team.color};--ti:${team.ink}`}>
+        <${Icon.lock} size=${14} /> ${team.name}${player ? ` · ${player.name}` : ''} · ${ago(sub.created_at, now)}
+      </div>
+      ${tags.length > 0 && html`<span class="claim-tags">${tags.join(' · ')}</span>`}
     </div>
-    <h2 class="challenge">${text}</h2>
-    ${rec && sub.team !== me.team && html`<p class="note bad">${team.name} locked this while you were filming 😬</p>`}
     <${Video} path=${sub.video_path} poster=${sub.thumb_path} localBlob=${uploader?.localBlob(sub.id)} />
     ${up &&
     html`<div class="upbar">
@@ -405,16 +487,15 @@ function SquareSheet({ data, d, me, square, onClose, refresh, now }) {
       <span>${up.error ? `Upload paused: ${up.error}` : `Uploading ${Math.round((up.pct || 0) * 100)}%`}</span>
       ${up.error && html`<button class="btn small" onClick=${() => uploader.retry(sub.id)}>Retry</button>`}
     </div>`}
-
     ${contest?.status === 'open' &&
     html`<${ContestPanel} data=${data} contest=${contest} sub=${sub} me=${me} now=${now} refresh=${refresh} />`}
     ${contest?.status === 'upheld' && html`<p class="note ok"><${Icon.check} size=${16} /> Survived a contest — this one stands.</p>`}
     ${canContest && !contesting &&
-    html`<button class="btn ghost full" onClick=${() => setContesting(true)}><${Icon.scale} size=${18} /> Contest this clip</button>`}
+    html`<button class="btn ghost full" onClick=${() => setContesting(true)}><${Icon.scale} size=${18} /> Contest ${team.name}’s clip</button>`}
     ${contesting &&
     html`<div class="stack contest-form">
-      <label class="label" for="rsn">What’s wrong with it? (optional)</label>
-      <input id="rsn" class="input" maxlength="120" placeholder="e.g. That’s not a stranger, that’s his roommate" value=${reason}
+      <label class="label" for=${`rsn-${sub.id}`}>What’s wrong with it? (optional)</label>
+      <input id=${`rsn-${sub.id}`} class="input" maxlength="120" placeholder="e.g. That’s not a stranger, that’s his roommate" value=${reason}
         onInput=${(e) => setReason(e.currentTarget.value)} />
       <p class="muted small">Players on other teams vote. Majority decides; ties keep the claim. Each clip can only be contested once.</p>
       <div class="row">
@@ -422,7 +503,7 @@ function SquareSheet({ data, d, me, square, onClose, refresh, now }) {
         <button class="btn grow" onClick=${submitContest} disabled=${busy}>${busy ? 'Opening…' : 'Open contest'}</button>
       </div>
     </div>`}
-  </${Sheet}>`;
+  </div>`;
 }
 
 function ContestPanel({ data, contest, sub, me, now, refresh }) {
@@ -505,7 +586,10 @@ function Feed({ data, d, me, list, openViewer, now }) {
           <div class="grow">
             <p class="feed-who"><${TeamDot} team=${t} /> <b>${t.name}</b>${p ? ` · ${p.name}` : ''}</p>
             <p class="feed-what">${ch}</p>
-            <p class="muted small">${ago(e.at, now)}${e.s.status === 'rejected' ? ' · thrown out' : ''}${!e.s.video_path ? ' · uploading…' : ''}</p>
+            <p class="muted small">${(() => {
+              const cl = d.claimBySub.get(e.s.id);
+              return d.pointsMode && cl ? html`<b class="pts-text">+${cl.value}</b>${cl.first && d.rush ? ' ⚡' : ''}${cl.bounty ? ' 💰' : ''} · ` : '';
+            })()}${ago(e.at, now)}${e.s.status === 'rejected' ? ' · thrown out' : ''}${!e.s.video_path ? ' · uploading…' : ''}</p>
           </div>
         </div>`;
       }
@@ -514,7 +598,7 @@ function Feed({ data, d, me, list, openViewer, now }) {
       if (e.type === 'contest')
         return html`<div key=${e.k} class="feed-sys warn">⚖️ ${ot ? ot.name : 'Someone'} contested ${t.name}’s “${short(ch, 40)}” · ${ago(e.at, now)}</div>`;
       return html`<div key=${e.k} class=${`feed-sys ${e.c.status === 'rejected' ? 'bad' : 'ok'}`}>
-        ${e.c.status === 'rejected' ? `❌ Thrown out — “${short(ch, 40)}” is open again` : `✅ Ruled legit — ${t.name} keeps “${short(ch, 40)}”`}
+        ${e.c.status === 'rejected' ? `❌ Thrown out — ${t.name}’s “${short(ch, 40)}”${d.rush ? '' : ' is open again'}` : `✅ Ruled legit — ${t.name} keeps “${short(ch, 40)}”`}
         ${e.c.resolved_by === 'host' ? ' (host call)' : ''} · ${ago(e.at, now)}
       </div>`;
     })}
@@ -529,7 +613,7 @@ function TeamsTab({ data, d, me }) {
       const t = teamInfo(game, st.team);
       const members = players.filter((p) => p.team === st.team);
       return html`<div class="team-row" style=${`--tc:${t.color};--ti:${t.ink}`}>
-        <div class="team-row-head"><b>${t.name}</b><span>${st.squares} square${st.squares === 1 ? '' : 's'} · ${st.lines} bingo${st.lines === 1 ? '' : 's'}</span></div>
+        <div class="team-row-head"><b>${t.name}</b><span>${d.pointsMode ? `${st.points} pts · ` : ''}${st.squares} square${st.squares === 1 ? '' : 's'} · ${st.lines} bingo${st.lines === 1 ? '' : 's'}</span></div>
         <ul class="members">
           ${members.map((p) => {
             const n = data.submissions.filter((s) => s.player_id === p.id && s.status === 'active').length;
