@@ -493,3 +493,24 @@ h1, h2, h3, h4, p { margin: 0; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* ---------- big boards (6×6, 7×7) ---------- */
+.board[data-size='6'], .board[data-size='7'] { gap: 3px; margin: 0 -10px; }
+.card .board[data-size='6'], .card .board[data-size='7'] { margin: 0 -12px; }
+.board[data-size='6'] .sq, .board[data-size='7'] .sq { aspect-ratio: 5 / 6; border-radius: 7px; border-width: 1px; padding: 2px; line-height: 1.08; }
+.board[data-size='6'] .sq { font-size: 9.5px; }
+.board[data-size='6'] .sq.long { font-size: 8.5px; }
+.board[data-size='6'] .sq.xlong { font-size: 8px; }
+.board[data-size='7'] .sq { font-size: 8.5px; }
+.board[data-size='7'] .sq.long { font-size: 8px; }
+.board[data-size='7'] .sq.xlong { font-size: 7.5px; }
+.board[data-size='6'] .sq-badge, .board[data-size='7'] .sq-badge { min-width: 13px; height: 13px; right: 2px; bottom: 2px; font-size: 7.5px; }
+.board[data-size='6'] .sq-badge svg, .board[data-size='7'] .sq-badge svg { width: 8px; height: 8px; }
+.board[data-size='6'] .sq.hl, .board[data-size='7'] .sq.hl { box-shadow: 0 0 0 1.5px var(--bg), 0 0 0 3.5px var(--ink); }
+@media (min-width: 420px) {
+  .board[data-size='6'] .sq { font-size: 10.5px; }
+  .board[data-size='6'] .sq.long { font-size: 9.5px; }
+  .board[data-size='7'] .sq { font-size: 9.5px; }
+  .board[data-size='7'] .sq.long { font-size: 9px; }
+  .board[data-size='7'] .sq.xlong { font-size: 8.5px; }
+}

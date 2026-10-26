@@ -25,7 +25,9 @@ test('boardLines counts', () => {
 
 test('normalizeSettings clamps', () => {
   const s = L.normalizeSettings({ size: 9, teamCount: 1, win: { type: 'lines', n: 99 } });
-  assert.equal(s.size, 5); assert.equal(s.teamCount, 2); assert.equal(s.win.n, 12);
+  assert.equal(s.size, 7); assert.equal(s.teamCount, 2); assert.equal(s.win.n, 16);
+  assert.equal(L.boardLines(7).length, 16);
+  assert.equal(L.winTarget(L.normalizeSettings({ size: 7, win: { type: 'majority' } })).n, 25);
   assert.equal(L.winTarget(L.normalizeSettings({ size: 5, win: { type: 'majority' } })).n, 13);
 });
 

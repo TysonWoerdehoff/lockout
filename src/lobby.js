@@ -164,7 +164,7 @@ function SettingsCard({ settings, isHost, save }) {
     <div class="field">
       <span class="label">Board size</span>
       <${Seg} value=${settings.size} onChange=${(v) => save({ size: v })}
-        options=${[3, 4, 5].map((n) => ({ value: n, label: `${n}×${n}` }))} />
+        options=${[3, 4, 5, 6, 7].map((n) => ({ value: n, label: `${n}×${n}` }))} />
     </div>
     <div class="field">
       <span class="label">To win</span>

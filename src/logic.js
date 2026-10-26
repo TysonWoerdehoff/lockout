@@ -27,7 +27,7 @@ const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 const int = (v, d) => (Number.isFinite(+v) ? Math.round(+v) : d);
 
 export function normalizeSettings(s = {}) {
-  const size = clamp(int(s.size, 5), 3, 5);
+  const size = clamp(int(s.size, 5), 3, 7);
   const total = size * size;
   const teamCount = clamp(int(s.teamCount, 2), 2, MAX_TEAMS);
   const type = ['lines', 'squares', 'majority'].includes(s.win?.type) ? s.win.type : 'lines';
