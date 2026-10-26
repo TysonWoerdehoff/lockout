@@ -29,7 +29,7 @@ export function Logo({ size = 56 }) {
 }
 
 export const RULES = html`<ol class="rules">
-  <li><b>Tap a square</b>, film yourself doing it, and lock it in. First team to lock a square owns it — nobody else can take it.</li>
+  <li><b>Tap a square</b> and upload a clip. With Lockout on, the first team to claim it owns it. With Lockout off, each team can submit once per square.</li>
   <li><b>Every clip is public</b> the moment it’s posted. Watch the feed to keep each other honest.</li>
   <li><b>Think a clip is bogus?</b> Contest it. Players on the other teams vote; majority wins, ties go to the team that claimed it. Contests auto-decide after 2 minutes.</li>
   <li><b>When a team hits the goal</b>, the game pauses for a short review window. If nothing gets overturned, they win.</li>
@@ -51,7 +51,28 @@ export function Home() {
   const [installable, setInstallable] = useState(!!deferredPrompt);
   const [iosHelp, setIosHelp] = useState(false);
   const [rulesOpen, setRulesOpen] = useState(false);
-  const recent = recentGames();
+  const [recent, setRecent] = useState(recentGames);
+
+  useEffect(() => {
+    let mounted = true;
+    const snapshot = recentGames();
+    if (!snapshot.length) return;
+    Promise.all(snapshot.map(async (entry) => {
+      try {
+        const [game] = await backend.select('games', { code: entry.code });
+        return game ? null : entry.code;
+      } catch {
+        return null; // Keep recent entries when the backend is unreachable.
+      }
+    })).then((missing) => {
+      const stale = new Set(missing.filter(Boolean));
+      if (!stale.size) return;
+      const latest = recentGames().filter((entry) => !stale.has(entry.code));
+      store.set('recent', latest);
+      if (mounted) setRecent(latest);
+    });
+    return () => { mounted = false; };
+  }, []);
 
   useEffect(() => {
     const f = () => setInstallable(true);

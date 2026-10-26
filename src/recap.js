@@ -94,8 +94,8 @@ export function Recap({ data, me, refresh }) {
       <h2 class="h2">Final board</h2>
       <${Board} game=${game} d=${d} highlight=${lines}
         onTap=${(i) => {
-          const s = d.owner.get(i);
-          if (s) setViewer({ list: [s], index: 0 });
+          const list = d.owner.get(i) || [];
+          if (list.length) setViewer({ list, index: 0 });
         }} />
     </section>
 

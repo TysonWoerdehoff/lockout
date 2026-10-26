@@ -1,12 +1,14 @@
 import { useState, useEffect, useRef, useCallback } from './h.js';
 import { supabaseBackend } from './backend-supabase.js';
 import { mockBackend } from './backend-mock.js';
+import { localBackend } from './backend-local.js';
 import { createUploader } from './uploads.js';
 import { MOCK, store, clientId, makeCode, extFor, rememberGame } from './util.js';
 import { DEFAULT_SETTINGS, normalizeSettings, makeBoard, fillTeams, leader, teamStats } from './logic.js';
 
 const cfg = window.LOCKOUT_CONFIG || {};
-export const backend = MOCK ? mockBackend() : cfg.supabaseUrl && cfg.supabaseKey ? supabaseBackend(cfg) : null;
+const LOCAL = new URLSearchParams(location.search).has('local');
+export const backend = LOCAL ? localBackend() : MOCK ? mockBackend() : cfg.supabaseUrl && cfg.supabaseKey ? supabaseBackend(cfg) : null;
 export const CLIENT_ID = clientId();
 
 // --- tiny event bus ---
@@ -215,7 +217,8 @@ export async function startGame(data, challenges, liveSettings) {
 
 export async function claimSquare(data, me, square, rec) {
   const { game } = data;
-  const r = await backend.insert('submissions', { game_id: game.id, square, team: me.team, player_id: me.id, status: 'active' });
+  const settings = normalizeSettings(game.settings);
+  const r = await backend.insert('submissions', { game_id: game.id, square, team: me.team, player_id: me.id, status: 'active', lockout: settings.lockout });
   if (r.conflict) return { conflict: true };
   const id = r.data.id;
   await uploader.enqueue({
@@ -229,6 +232,13 @@ export async function claimSquare(data, me, square, rec) {
     attempts: 0,
   });
   return { ok: true, id };
+}
+
+export async function disbandGame(game) {
+  const [current] = await backend.select('games', { id: game.id, status: 'lobby' });
+  if (!current) return false;
+  await backend.remove('games', { id: game.id, status: 'lobby' });
+  return true;
 }
 
 export async function openContest(data, me, sub, reason) {

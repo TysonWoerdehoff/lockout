@@ -113,7 +113,7 @@ export function Game({ data, me, refresh, now }) {
     ${tab === 'board' &&
     html`<section class="board-wrap">
       <${Board} game=${game} d=${d} highlight=${highlight} onTap=${setOpenSq} dim=${d.paused} />
-      <p class="hint center">${d.paused ? 'Game paused for review' : 'Tap a square to claim it with a video'} · ${describeWin(d.settings)}</p>
+      <p class="hint center">${d.paused ? 'Game paused for review' : d.settings.lockout ? 'Tap a square to claim it with a video' : 'Tap a square to submit or challenge clips'} · ${describeWin(d.settings)}</p>
     </section>`}
     ${tab === 'feed' && html`<${Feed} data=${data} d=${d} me=${me} list=${claimList} openViewer=${openViewer} now=${now} />`}
     ${tab === 'teams' && html`<${TeamsTab} data=${data} d=${d} me=${me} refresh=${refresh} />`}
@@ -182,19 +182,23 @@ export function Board({ game, d, highlight = new Set(), onTap, dim }) {
   const n = d.settings.size;
   return html`<div class=${`board ${dim ? 'dim' : ''}`} style=${`--n:${n}`} data-size=${n}>
     ${(game.board || []).map((text, i) => {
-      const sub = d.owner.get(i);
-      const team = sub ? teamInfo(game, sub.team) : null;
-      const contest = sub ? d.contestBySub.get(sub.id) : null;
-      const up = sub && !sub.video_path ? uploader?.status(sub.id) : null;
-      const cls = ['sq', sub ? 'claimed' : '', highlight.has(i) ? 'hl' : '', text.length > 28 ? 'long' : '', text.length > 48 ? 'xlong' : ''].join(' ');
+      const subs = d.owner.get(i) || [];
+      const teams = [...new Set(subs.map((s) => s.team))].map((team) => teamInfo(game, team));
+      const team = teams[0] || null;
+      const contested = subs.some((s) => d.contestBySub.get(s.id)?.status === 'open');
+      const uploading = subs.some((s) => !s.video_path && uploader?.status(s.id));
+      const shared = !d.settings.lockout && teams.length > 1;
+      const cls = ['sq', subs.length ? 'claimed' : '', shared ? 'shared' : '', highlight.has(i) ? 'hl' : '', text.length > 28 ? 'long' : '', text.length > 48 ? 'xlong' : ''].join(' ');
       let badge = null;
-      if (sub) {
-        if (contest?.status === 'open') badge = html`<span class="sq-badge warn"><${Icon.scale} size=${11} /></span>`;
-        else if (!sub.video_path) badge = html`<span class="sq-badge">${up ? `${Math.round((up.pct || 0) * 100)}%` : html`<${Icon.hourglass} size=${10} />`}</span>`;
+      if (subs.length) {
+        if (contested) badge = html`<span class="sq-badge warn"><${Icon.scale} size=${11} /></span>`;
+        else if (shared) badge = html`<span class="sq-badge">${teams.length} teams</span>`;
+        else if (uploading) badge = html`<span class="sq-badge"><${Icon.hourglass} size=${10} /></span>`;
         else badge = html`<span class="sq-badge"><${Icon.play} size=${10} /></span>`;
       }
-      return html`<button key=${i} class=${cls} style=${team ? `--tc:${team.color};--ti:${team.ink}` : ''} onClick=${() => onTap?.(i)}
-        aria-label=${`${text}${team ? `, locked by ${team.name}` : ', open'}`}>
+      return html`<button key=${i} class=${cls} style=${`${team ? `--tc:${shared ? 'transparent' : team.color};--ti:${shared ? 'var(--ink)' : team.ink}` : ''};--team-count:${teams.length}`} onClick=${() => onTap?.(i)}
+        aria-label=${`${text}${teams.length ? `, submitted by ${teams.map((t) => t.name).join(', ')}` : ', open'}`}>
+        ${shared && html`<span class="sq-colors">${teams.map((t) => html`<i style=${`--team-color:${t.color}`} title=${t.name}></i>`)}</span>`}
         <span class="sq-txt">${text}</span>${badge}
       </button>`;
     })}
@@ -282,7 +286,9 @@ function Banners({ data, d, me, now, refresh, onOpenSquare, onReview }) {
 function SquareSheet({ data, d, me, square, onClose, refresh, now }) {
   const { game, players, contests, votes } = data;
   const text = game.board?.[square] ?? '';
-  const sub = d.owner.get(square);
+  const squareSubs = d.owner.get(square) || [];
+  const [selectedId, setSelectedId] = useState(() => d.settings.lockout ? squareSubs[0]?.id || null : null);
+  const sub = squareSubs.find((s) => s.id === selectedId) || (d.settings.lockout ? squareSubs[0] || null : null);
   const [rec, setRec] = useState(null);
   const [recording, setRecording] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -354,6 +360,32 @@ function SquareSheet({ data, d, me, square, onClose, refresh, now }) {
   }
 
   // ---- open square ----
+  if (!d.settings.lockout && !sub && squareSubs.length && !rec) {
+    const mySubmission = hasTeam && squareSubs.some((s) => s.team === me.team);
+    return html`<${Sheet} open onClose=${onClose} title="Square ${square + 1}">
+      <h2 class="challenge">${text}</h2>
+      <p class="muted small">${squareSubs.length} team${squareSubs.length === 1 ? '' : 's'} submitted. Open a clip to watch or challenge it.</p>
+      <div class="square-submissions">
+        ${squareSubs.map((s) => {
+          const t = teamInfo(game, s.team);
+          const p = players.find((x) => x.id === s.player_id);
+          const c = contests.find((x) => x.submission_id === s.id);
+          return html`<div class="square-submission" style=${`--tc:${t.color};--ti:${t.ink}`}>
+            <span class="tdot"></span><span class="grow"><b>${t.name}</b><small>${p ? ` · ${p.name}` : ''} · ${ago(s.created_at, now)}</small></span>
+            <button class="btn small" onClick=${() => setSelectedId(s.id)}>${c?.status === 'open' ? 'View contest' : 'Watch / challenge'}</button>
+          </div>`;
+        })}
+      </div>
+      ${active && !blocker && hasTeam && !mySubmission
+        ? html`<div class="stack">
+            ${canRecord() && html`<button class="btn big team-btn" style=${`--tc:${myTeam.color};--ti:${myTeam.ink}`} onClick=${() => setRecording(true)}><${Icon.camera} size=${20} /> Submit for ${myTeam.name}</button>`}
+            <button class=${`btn ${canRecord() ? 'ghost' : 'big'}`} onClick=${pick}><${Icon.upload} size=${18} /> Upload for ${myTeam.name}</button>
+          </div>`
+        : hasTeam && mySubmission ? html`<p class="note">Your team already submitted for this square.</p>` : null}
+      ${picker}
+    </${Sheet}>`;
+  }
+
   if (!sub) {
     return html`<${Sheet} open onClose=${() => !busy && onClose()} title="">
       <p class="eyebrow">Square ${square + 1} · open</p>
@@ -379,7 +411,7 @@ function SquareSheet({ data, d, me, square, onClose, refresh, now }) {
               <${Icon.camera} size=${20} /> Record proof
             </button>`}
             <button class=${`btn ${canRecord() ? 'ghost' : 'big'}`} onClick=${pick}><${Icon.upload} size=${18} /> Upload a video</button>
-            <p class="muted small center">First team to lock it in owns it. Clips can be up to 60 seconds.</p>
+            <p class="muted small center">${d.settings.lockout ? 'First team to lock it in owns it.' : 'Your team can submit once. Other teams can submit and challenge clips too.'} Clips can be up to 60 seconds.</p>
           </div>`}
       ${picker}
     </${Sheet}>`;
@@ -393,6 +425,7 @@ function SquareSheet({ data, d, me, square, onClose, refresh, now }) {
   const canContest = active && hasTeam && me.team !== sub.team && !contest;
 
   return html`<${Sheet} open onClose=${onClose} title="">
+    ${!d.settings.lockout && html`<button class="btn ghost small square-back" onClick=${() => setSelectedId(null)}>← All submissions for this square</button>`}
     <div class="claim-head" style=${`--tc:${team.color};--ti:${team.ink}`}>
       <${Icon.lock} size=${14} /> ${team.name}${player ? ` · ${player.name}` : ''} · ${ago(sub.created_at, now)}
     </div>

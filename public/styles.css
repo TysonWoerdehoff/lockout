@@ -216,6 +216,7 @@ h1, h2, h3, h4, p { margin: 0; }
 .pool li { break-inside: avoid; margin-bottom: 4px; }
 .pack { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
 .lobby-foot { display: flex; justify-content: center; flex-wrap: wrap; gap: 4px; }
+.lobby { padding-bottom: calc(150px + var(--sab)); }
 
 .dock {
   position: fixed;
@@ -229,7 +230,10 @@ h1, h2, h3, h4, p { margin: 0; }
   flex-direction: column;
   align-items: center;
   gap: 8px;
+  pointer-events: none;
 }
+.dock > * { pointer-events: auto; }
+.dock-note, .waiting { pointer-events: none; }
 .dock .btn { width: 100%; max-width: 528px; }
 .dock-note { font-size: 13px; font-weight: 600; color: var(--warn); }
 .btn.go { box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.45); }
@@ -333,6 +337,14 @@ h1, h2, h3, h4, p { margin: 0; }
 }
 .sq-txt { display: -webkit-box; -webkit-line-clamp: 7; -webkit-box-orient: vertical; overflow: hidden; }
 .sq.claimed { background: var(--tc); color: var(--ti); border-color: var(--tc); animation: pop 0.35s ease; }
+.sq.shared { background: var(--surface); color: var(--ink); border-color: var(--line); }
+.sq-colors { position: absolute; left: 0; right: 0; bottom: 0; height: 10px; display: grid; grid-template-columns: repeat(var(--team-count), minmax(0, 1fr)); gap: 2px; }
+.sq-colors i { background: var(--team-color); }
+.sq.shared .sq-badge { top: 3px; bottom: auto; }
+.square-submissions { display: flex; flex-direction: column; gap: 8px; }
+.square-submission { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--line); border-left: 4px solid var(--tc); border-radius: 12px; background: var(--surface-2); }
+.square-submission small { display: block; color: var(--muted); font-size: 11px; }
+.square-back { align-self: flex-start; }
 .sq.hl { box-shadow: 0 0 0 2.5px var(--bg), 0 0 0 5px var(--ink); z-index: 1; }
 .sq-badge {
   position: absolute;

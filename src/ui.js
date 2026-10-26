@@ -29,6 +29,16 @@ export function Sheet({ open, onClose, children, title, tall }) {
   `;
 }
 
+export function ConfirmSheet({ open, onClose, onConfirm, title, message, confirmLabel = 'Confirm', danger = false, busy = false }) {
+  return html`<${Sheet} open=${open} onClose=${onClose} title=${title}>
+    <p>${message}</p>
+    <div class="row">
+      <button class="btn ghost grow" onClick=${onClose} disabled=${busy}>Cancel</button>
+      <button class=${`btn grow ${danger ? 'danger' : ''}`} onClick=${onConfirm} disabled=${busy}>${busy ? 'Working…' : confirmLabel}</button>
+    </div>
+  </${Sheet}>`;
+}
+
 export function Toaster() {
   const [items, setItems] = useState([]);
   useEffect(

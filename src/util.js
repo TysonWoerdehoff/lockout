@@ -88,6 +88,9 @@ export function rememberGame(code, title) {
   list.unshift({ code, title, at: Date.now() });
   store.set('recent', list.slice(0, 6));
 }
+export function forgetGame(code) {
+  store.set('recent', recentGames().filter((g) => g.code !== code));
+}
 
 export function extFor(type = '') {
   if (type.includes('mp4')) return 'mp4';

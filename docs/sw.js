@@ -1,8 +1,8 @@
 // Lockout service worker: makes the app installable and lets it open with bad signal.
 // App files are network-first (so new versions show up right away) with a cached fallback.
 // Game data and video clips always go straight to the network.
-const CACHE = 'lockout-mvoocbzt';
-const SHELL = ['./', 'index.html', 'app.js?v=mvoocbzt', 'styles.css?v=mvoocbzt', 'config.js?v=mvoocbzt', 'manifest.webmanifest', 'icons/icon-192.png'];
+const CACHE = 'lockout-mvprdbx0';
+const SHELL = ['./', 'index.html', 'app.js?v=mvprdbx0', 'styles.css?v=mvprdbx0', 'config.js?v=mvprdbx0', 'manifest.webmanifest', 'icons/icon-192.png'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -17,6 +17,7 @@ self.addEventListener('activate', (e) => {
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== location.origin) return;
+  if (url.pathname.startsWith('/api/')) return; // live local data and clips must never be served from cache
   e.respondWith(
     fetch(e.request)
       .then((res) => {

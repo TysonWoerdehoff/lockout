@@ -18,6 +18,7 @@ export const MAX_CHALLENGE_LEN = 120;
 export const DEFAULT_SETTINGS = {
   size: 5,
   teamCount: 2,
+  lockout: true,
   win: { type: 'lines', n: 1 }, // 'lines' | 'squares' | 'majority'
   timeLimitMin: 0, // 0 = no limit
   reviewSecs: 30,
@@ -36,6 +37,7 @@ export function normalizeSettings(s = {}) {
   return {
     size,
     teamCount,
+    lockout: s.lockout !== false,
     win: { type, n },
     timeLimitMin: clamp(int(s.timeLimitMin, 0), 0, 600),
     reviewSecs: clamp(int(s.reviewSecs, 30), 0, 300),
@@ -147,20 +149,21 @@ export function findConditionWinner(active, settings) {
 /** Per-team squares, completed lines, and time of latest claim. */
 export function teamStats(settings, active) {
   const stats = [...Array(settings.teamCount)].map((_, team) => ({ team, squares: 0, lines: 0, lineList: [], lastAt: 0 }));
-  const owner = new Map();
+  const owned = stats.map(() => new Set());
   for (const s of active) {
     const st = stats[s.team];
     if (!st) continue;
-    st.squares++;
+    if (owned[s.team].has(s.square)) continue;
+    owned[s.team].add(s.square);
+    st.squares = owned[s.team].size;
     st.lastAt = Math.max(st.lastAt, ts(s.created_at) || 0);
-    owner.set(s.square, s.team);
   }
   for (const line of boardLines(settings.size)) {
-    const t = owner.get(line[0]);
-    if (t === undefined) continue;
-    if (line.every((q) => owner.get(q) === t)) {
-      stats[t].lines++;
-      stats[t].lineList.push(line);
+    for (const st of stats) {
+      if (line.every((q) => owned[st.team].has(q))) {
+        st.lines++;
+        st.lineList.push(line);
+      }
     }
   }
   return stats;
@@ -223,7 +226,9 @@ export function decide({ game, players, submissions, contests, votes }, now) {
   const active = submissions.filter((s) => s.status === 'active');
   const condWinner = findConditionWinner(active, settings);
   const timeUp = !!game.ends_at && now >= ts(game.ends_at);
-  const full = new Set(active.map((s) => s.square)).size >= total;
+  const full = settings.lockout
+    ? new Set(active.map((s) => s.square)).size >= total
+    : [...Array(settings.teamCount)].every((_, team) => new Set(active.filter((s) => s.team === team).map((s) => s.square)).size >= total);
 
   let candidate = null;
   let reason = null;
@@ -266,7 +271,11 @@ export function derive(state, now = Date.now()) {
   const { game, players = [], submissions = [], contests = [], votes = [] } = state;
   const settings = normalizeSettings(game?.settings);
   const active = submissions.filter((s) => s.status === 'active');
-  const owner = new Map(active.map((s) => [s.square, s]));
+  const owner = new Map();
+  for (const s of active) {
+    if (!owner.has(s.square)) owner.set(s.square, []);
+    owner.get(s.square).push(s);
+  }
   const stats = teamStats(settings, active);
   const contestBySub = new Map(contests.map((c) => [c.submission_id, c]));
   const playerById = new Map(players.map((p) => [p.id, p]));

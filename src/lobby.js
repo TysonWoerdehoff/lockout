@@ -1,10 +1,10 @@
 import { html, useState, useEffect, useRef, useMemo } from './h.js';
-import { backend, startGame, toast, go, CLIENT_ID } from './core.js';
+import { backend, startGame, disbandGame, toast, go, CLIENT_ID } from './core.js';
 import { normalizeSettings, teamInfo, parseChallenges, describeWin, randomTeams, MAX_TEAMS } from './logic.js';
-import { store } from './util.js';
+import { store, forgetGame } from './util.js';
 import { PACKS } from './packs.js';
 import { Icon } from './icons.js';
-import { Seg, Stepper, Sheet, TeamDot } from './ui.js';
+import { Seg, Stepper, Sheet, TeamDot, ConfirmSheet } from './ui.js';
 import { RULES } from './home.js';
 
 export function shareInvite(game) {
@@ -24,6 +24,8 @@ export function Lobby({ data, me, refresh }) {
   const isHost = game.host_id === CLIENT_ID;
   const host = players.find((p) => p.client_id === game.host_id);
   const [rules, setRules] = useState(false);
+  const [confirmAction, setConfirmAction] = useState(null);
+  const [confirmBusy, setConfirmBusy] = useState(false);
   const [, bump] = useState(0);
 
   // Optimistic settings so quick taps don't overwrite each other while a save is in flight.
@@ -71,15 +73,37 @@ export function Lobby({ data, me, refresh }) {
   }
 
   async function takeHost() {
-    if (!confirm('Become the host of this game?')) return;
     await backend.update('games', { host_id: CLIENT_ID }, { id: game.id });
     refresh();
   }
 
   async function leave() {
-    if (!confirm('Leave this game?')) return;
-    await backend.remove('players', { id: me.id });
-    go(null);
+    setConfirmAction('leave');
+  }
+
+  async function confirmActionNow() {
+    setConfirmBusy(true);
+    try {
+      if (confirmAction === 'leave') {
+        await backend.remove('players', { id: me.id });
+        go(null);
+      } else if (confirmAction === 'host') await takeHost();
+      else if (confirmAction === 'disband') {
+        const removed = await disbandGame(game);
+        if (!removed) {
+          toast('This lobby has already started or was removed.', { kind: 'bad' });
+          refresh();
+          return;
+        }
+        forgetGame(game.code);
+        go(null);
+      }
+      setConfirmAction(null);
+    } catch (e) {
+      toast(e.message || 'Could not complete that action', { kind: 'bad' });
+    } finally {
+      setConfirmBusy(false);
+    }
   }
 
   const teams = [...Array(settings.teamCount)].map((_, i) => ({
@@ -134,7 +158,8 @@ export function Lobby({ data, me, refresh }) {
 
     <div class="lobby-foot">
       <button class="link-btn" onClick=${() => setRules(true)}>How to play</button>
-      ${!isHost && html`<button class="link-btn" onClick=${takeHost}>Host gone? Take over</button>`}
+      ${isHost && html`<button class="link-btn danger" onClick=${() => setConfirmAction('disband')}>Disband lobby</button>`}
+      ${!isHost && html`<button class="link-btn" onClick=${() => setConfirmAction('host')}>Host gone? Take over</button>`}
       <button class="link-btn danger" onClick=${leave}>Leave game</button>
     </div>
     ${!isHost &&
@@ -142,6 +167,11 @@ export function Lobby({ data, me, refresh }) {
       <div class="waiting"><span class="pulse"></span> Waiting for ${host?.name || 'the host'} to start…</div>
     </div>`}
     <${Sheet} open=${rules} onClose=${() => setRules(false)} title="How to play">${RULES}</${Sheet}>
+    <${ConfirmSheet} open=${!!confirmAction} onClose=${() => !confirmBusy && setConfirmAction(null)}
+      onConfirm=${confirmActionNow} busy=${confirmBusy} danger=${confirmAction !== 'host'}
+      title=${confirmAction === 'leave' ? 'Leave game?' : confirmAction === 'host' ? 'Take over as host?' : 'Disband lobby?'}
+      message=${confirmAction === 'leave' ? 'You will leave this lobby. You can rejoin with the game code.' : confirmAction === 'host' ? 'You will become the new host of this lobby.' : 'This deletes the lobby and removes every player from it.'}
+      confirmLabel=${confirmAction === 'leave' ? 'Leave game' : confirmAction === 'host' ? 'Take over' : 'Disband lobby'} />
   </main>`;
 }
 
@@ -152,6 +182,7 @@ function SettingsCard({ settings, isHost, save }) {
       <h2 class="h2">Rules</h2>
       <dl class="facts">
         <div><dt>Board</dt><dd>${settings.size}×${settings.size}</dd></div>
+        <div><dt>Lockout</dt><dd>${settings.lockout ? 'On' : 'Off'}</dd></div>
         <div><dt>To win</dt><dd>${describeWin(settings)}</dd></div>
         <div><dt>Time limit</dt><dd>${settings.timeLimitMin ? `${settings.timeLimitMin} min (most squares wins)` : 'None'}</dd></div>
         <div><dt>Review window</dt><dd>${settings.reviewSecs}s</dd></div>
@@ -165,6 +196,12 @@ function SettingsCard({ settings, isHost, save }) {
       <span class="label">Board size</span>
       <${Seg} value=${settings.size} onChange=${(v) => save({ size: v })}
         options=${[3, 4, 5].map((n) => ({ value: n, label: `${n}×${n}` }))} />
+    </div>
+    <div class="field">
+      <span class="label">Lockout</span>
+      <${Seg} value=${settings.lockout} onChange=${(v) => save({ lockout: v })}
+        options=${[{ value: true, label: 'On' }, { value: false, label: 'Off' }]} />
+      <p class="hint">${settings.lockout ? 'First team to submit owns each square.' : 'Each team can submit once per square and challenge other teams’ clips.'}</p>
     </div>
     <div class="field">
       <span class="label">To win</span>
@@ -197,6 +234,7 @@ function ChallengesCard({ game, settings, isHost, refresh, data }) {
   const [draft, setDraft] = useState(() => (game.challenges || []).join('\n'));
   const [packsOpen, setPacksOpen] = useState(false);
   const [starting, setStarting] = useState(false);
+  const [clearConfirm, setClearConfirm] = useState(false);
   const saveTimer = useRef();
   const parsed = useMemo(() => parseChallenges(draft), [draft]);
   const saved = store.get('packs', []);
@@ -268,7 +306,7 @@ function ChallengesCard({ game, settings, isHost, refresh, data }) {
     <div class="row wrap">
       <button class="btn ghost small" onClick=${() => setPacksOpen(true)}>+ Add a pack</button>
       <button class="btn ghost small" onClick=${savePack} disabled=${!parsed.length}>Save as pack</button>
-      ${draft && html`<button class="btn ghost small" onClick=${() => confirm('Clear all challenges?') && update('')}>Clear</button>`}
+      ${draft && html`<button class="btn ghost small" onClick=${() => setClearConfirm(true)}>Clear</button>`}
     </div>
     <div class="dock">
       ${short > 0
@@ -296,5 +334,8 @@ function ChallengesCard({ game, settings, isHost, refresh, data }) {
         )}
       </div>
     </${Sheet}>
+    <${ConfirmSheet} open=${clearConfirm} onClose=${() => setClearConfirm(false)} title="Clear challenges?"
+      message="Remove all challenges from this lobby?" confirmLabel="Clear challenges" danger
+      onConfirm=${() => { setClearConfirm(false); update(''); }} />
   </section>`;
 }

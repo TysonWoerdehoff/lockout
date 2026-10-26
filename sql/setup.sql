@@ -46,13 +46,18 @@ create table if not exists public.submissions (
   square     int not null,
   team       int not null,
   player_id  uuid references public.players(id) on delete set null,
+  lockout    boolean not null default true,
   video_path text,
   thumb_path text,
   status     text not null default 'active' check (status in ('active','rejected')),
   created_at timestamptz not null default now()
 );
--- Lockout rule: only one live claim per square.
-create unique index if not exists submissions_one_owner on public.submissions (game_id, square) where status = 'active';
+-- Every team may submit once per square. In lockout mode, the first team's claim
+-- also blocks submissions from all other teams.
+alter table public.submissions add column if not exists lockout boolean not null default true;
+drop index if exists public.submissions_one_owner;
+create unique index if not exists submissions_one_per_team on public.submissions (game_id, square, team) where status = 'active';
+create unique index if not exists submissions_one_owner on public.submissions (game_id, square) where status = 'active' and lockout;
 create index if not exists submissions_game on public.submissions (game_id);
 
 create table if not exists public.contests (

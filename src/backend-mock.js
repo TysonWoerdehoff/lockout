@@ -30,7 +30,8 @@ function violates(d, table, row, selfId) {
   if (table === 'players')
     return others.some((r) => r.game_id === row.game_id && (r.client_id === row.client_id || r.name.toLowerCase() === row.name.toLowerCase()));
   if (table === 'submissions')
-    return row.status === 'active' && others.some((r) => r.game_id === row.game_id && r.square === row.square && r.status === 'active');
+    return row.status === 'active' && others.some((r) => r.game_id === row.game_id && r.square === row.square && r.status === 'active' &&
+      (r.team === row.team || (row.lockout !== false && r.lockout !== false)));
   if (table === 'contests') return others.some((r) => r.submission_id === row.submission_id);
   return false;
 }
@@ -38,7 +39,7 @@ function violates(d, table, row, selfId) {
 const DEFAULTS = {
   games: { status: 'lobby', settings: {}, challenges: [], team_names: [], board: null, pending_winner: null, winner: null },
   players: { team: null },
-  submissions: { status: 'active', video_path: null, thumb_path: null },
+  submissions: { status: 'active', lockout: true, video_path: null, thumb_path: null },
   contests: { status: 'open' },
   votes: {},
 };
@@ -115,7 +116,17 @@ export function mockBackend() {
     },
     async remove(table, match) {
       const d = load();
+      const removed = d[table].filter((r) => matches(r, match));
       d[table] = d[table].filter((r) => !matches(r, match));
+      if (table === 'games' && removed.length) {
+        const gameIds = new Set(removed.map((r) => r.id));
+        const submissionIds = new Set(d.submissions.filter((r) => gameIds.has(r.game_id)).map((r) => r.id));
+        const contestIds = new Set(d.contests.filter((r) => gameIds.has(r.game_id)).map((r) => r.id));
+        d.players = d.players.filter((r) => !gameIds.has(r.game_id));
+        d.submissions = d.submissions.filter((r) => !gameIds.has(r.game_id));
+        d.contests = d.contests.filter((r) => !gameIds.has(r.game_id));
+        d.votes = d.votes.filter((r) => !gameIds.has(r.game_id) && !submissionIds.has(r.submission_id) && !contestIds.has(r.contest_id));
+      }
       save(d, table);
     },
     subscribe(gameId, onEvent, onStatus) {
