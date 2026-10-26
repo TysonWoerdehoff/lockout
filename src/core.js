@@ -37,6 +37,8 @@ export function toast(msg, opts = {}) {
 function friendlyError(msg) {
   const m = String(msg || '');
   if (/failed to fetch|networkerror|load failed|network request failed/i.test(m)) return 'Can’t reach the server — check your connection and try again.';
+  if (/schema cache|does not exist|relation .* not/i.test(m)) return 'The database isn’t set up yet — run setup.sql in the Supabase SQL Editor.';
+  if (/row-level security|permission denied/i.test(m)) return 'The database blocked that — re-run setup.sql in the Supabase SQL Editor.';
   return m;
 }
 
