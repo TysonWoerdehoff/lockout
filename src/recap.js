@@ -123,6 +123,8 @@ export function Recap({ data, me, refresh }) {
           </div>`}
     </section>
 
+    <${FinishMap} data=${data} />
+
     <div class="recap-foot">
       ${isHost &&
       (game.next_code
@@ -135,4 +137,95 @@ export function Recap({ data, me, refresh }) {
     html`<${ClipViewer} data=${data} list=${viewer.list} index=${viewer.index}
       onIndex=${(i) => setViewer({ ...viewer, index: i })} onClose=${() => setViewer(null)} />`}
   </main>`;
+}
+
+function mapWorldPoint(latitude, longitude, zoom) {
+  const scale = 256 * 2 ** zoom;
+  const lat = Math.max(-85.05112878, Math.min(85.05112878, Number(latitude) || 0));
+  const lon = Number(longitude) || 0;
+  const sin = Math.sin(lat * Math.PI / 180);
+  return { x: (lon + 180) / 360 * scale, y: (0.5 - Math.log((1 + sin) / (1 - sin)) / (4 * Math.PI)) * scale };
+}
+
+function FinishMap({ data }) {
+  const { game, players, submissions, locations = [] } = data;
+  const validLocations = locations.filter((point) => Number.isFinite(+point.latitude) && Number.isFinite(+point.longitude));
+  const tracksByPlayer = new Map();
+  for (const point of validLocations) {
+    if (!tracksByPlayer.has(point.player_id)) tracksByPlayer.set(point.player_id, []);
+    tracksByPlayer.get(point.player_id).push(point);
+  }
+  for (const track of tracksByPlayer.values()) track.sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
+
+  const complete = submissions.filter((sub) => sub.status === 'active' && sub.team != null)
+    .sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at) || String(a.id).localeCompare(String(b.id)));
+  const taskNumbers = new Map(), counts = new Map();
+  for (const sub of complete) { const number = (counts.get(sub.team) || 0) + 1; counts.set(sub.team, number); taskNumbers.set(sub.id, number); }
+  const pins = complete.flatMap((sub) => {
+    if (sub.task_latitude != null && sub.task_longitude != null && Number.isFinite(+sub.task_latitude) && Number.isFinite(+sub.task_longitude)) {
+      return [{ sub, latitude: +sub.task_latitude, longitude: +sub.task_longitude }];
+    }
+    const samples = tracksByPlayer.get(sub.player_id) || [];
+    if (!samples.length) return [];
+    const at = Date.parse(sub.created_at);
+    const closest = samples.reduce((best, sample) => Math.abs(Date.parse(sample.created_at) - at) < Math.abs(Date.parse(best.created_at) - at) ? sample : best, samples[0]);
+    const tolerance = Math.max(120000, (Number(game.settings?.locationUpdateIntervalMin) || 1) * 30000 + 30000);
+    return Math.abs(Date.parse(closest.created_at) - at) <= tolerance ? [{ sub, latitude: +closest.latitude, longitude: +closest.longitude }] : [];
+  });
+
+  const tracks = [...tracksByPlayer.entries()].map(([id, points]) => ({
+    id,
+    player: players.find((player) => player.id === id),
+    points,
+  })).filter((track) => track.player?.team != null && track.points.length > 1);
+  const allPoints = [
+    ...validLocations.map((point) => ({ latitude: +point.latitude, longitude: +point.longitude })),
+    ...pins.map(({ latitude, longitude }) => ({ latitude, longitude })),
+  ];
+  if (!allPoints.length) return html`<section class="card finish-map"><h2 class="h2">Game map</h2><p class="muted">No location data was recorded during this game.</p></section>`;
+
+  const width = 528, height = 320, padding = 36;
+  const normalized = allPoints.map((point) => mapWorldPoint(point.latitude, point.longitude, 0));
+  const boundsAt = (level) => {
+    const scale = 2 ** level;
+    return { minX: Math.min(...normalized.map((p) => p.x * scale)), maxX: Math.max(...normalized.map((p) => p.x * scale)), minY: Math.min(...normalized.map((p) => p.y * scale)), maxY: Math.max(...normalized.map((p) => p.y * scale)) };
+  };
+  let zoom = 18, bounds = boundsAt(zoom);
+  while (zoom > 2) {
+    if (bounds.maxX - bounds.minX <= width - padding * 2 && bounds.maxY - bounds.minY <= height - padding * 2) break;
+    zoom--;
+    bounds = boundsAt(zoom);
+  }
+  const centerX = (bounds.minX + bounds.maxX) / 2, centerY = (bounds.minY + bounds.maxY) / 2;
+  const left = centerX - width / 2, top = centerY - height / 2, tileCount = 2 ** zoom;
+  const minTileX = Math.floor(left / 256), maxTileX = Math.floor((left + width) / 256);
+  const minTileY = Math.floor(top / 256), maxTileY = Math.floor((top + height) / 256);
+  const toScreen = (latitude, longitude) => { const point = mapWorldPoint(latitude, longitude, zoom); return { x: point.x - left, y: point.y - top }; };
+  const tiles = [];
+  for (let tileY = minTileY; tileY <= maxTileY; tileY++) {
+    if (tileY < 0 || tileY >= tileCount) continue;
+    for (let tileX = minTileX; tileX <= maxTileX; tileX++) {
+      const x = ((tileX % tileCount) + tileCount) % tileCount;
+      const tileHost = ['a', 'b', 'c'][x % 3];
+      tiles.push({ key: `${zoom}/${x}/${tileY}`, x: tileX * 256 - left, y: tileY * 256 - top, url: `https://tile-${tileHost}.openstreetmap.fr/hot/${zoom}/${x}/${tileY}.png` });
+    }
+  }
+
+  return html`<section class="card finish-map">
+    <h2 class="h2">Game map</h2>
+    <div class="finish-map-canvas" role="img" aria-label="Map showing player routes and completed task pins">
+      ${tiles.map((tile) => html`<img key=${tile.key} class="finish-map-tile" src=${tile.url} alt="" draggable="false" style=${`left:${tile.x / width * 100}%;top:${tile.y / height * 100}%;width:${256 / width * 100}%;height:${256 / height * 100}%`} />`)}
+      <svg class="finish-map-overlay" viewBox=${`0 0 ${width} ${height}`} aria-hidden="true">
+        ${tracks.map((track) => {
+          const color = teamInfo(game, track.player.team).color;
+          const points = track.points.map((point) => toScreen(point.latitude, point.longitude));
+          return html`<polyline points=${points.map((point) => `${point.x},${point.y}`).join(' ')} stroke=${color} />`;
+        })}
+        ${pins.map(({ sub, latitude, longitude }) => {
+          const point = toScreen(latitude, longitude), team = teamInfo(game, sub.team);
+          return html`<g transform=${`translate(${point.x} ${point.y})`}><circle r="13" fill=${team.color} stroke="#fff" stroke-width="2" /><text y="4" text-anchor="middle" fill="#fff">${taskNumbers.get(sub.id)}</text><title>${`Task ${taskNumbers.get(sub.id)}: ${game.board?.[sub.square] || ''}`}</title></g>`;
+        })}
+      </svg>
+    </div>
+  </section>`;
 }

@@ -1,7 +1,7 @@
 import { html, useState, useEffect, useRef, useMemo } from './h.js';
 import { CLIENT_ID, uploader, useBus, toast, claimSquare, openContest, castVote, hostRule, endGameNow, go, backend, bus } from './core.js';
 import { derive, teamInfo, contestTally, describeWin, eligibleVoters, CONTEST_SECONDS, ts } from './logic.js';
-import { store, clock, ago, vibrate } from './util.js';
+import { store, clock, ago, vibrate, getTheme } from './util.js';
 import { Icon } from './icons.js';
 import { Sheet, ConfirmSheet, TeamDot, Thumb, Video, Empty, ThemeToggle } from './ui.js';
 import { Recorder, useVideoPicker, canRecord } from './recorder.js';
@@ -322,6 +322,7 @@ function MapTab({ data, me, onOpenSquare }) {
   const game = data.game;
   const viewKey = `map:view:${game.id}`;
   const savedView = store.get(viewKey, {});
+  const [darkMap, setDarkMap] = useState(() => getTheme() === 'dark');
   const [showPeople, setShowPeople] = useState(() => store.get(`map:people:${data.game.id}`, true));
   const [showTasks, setShowTasks] = useState(() => store.get(`map:tasks:${data.game.id}`, true));
   const [mapSize, setMapSize] = useState(() => ({ w: window.innerWidth, h: window.innerHeight }));
@@ -334,6 +335,14 @@ function MapTab({ data, me, onOpenSquare }) {
   const activePointers = useRef(new Map());
   const pinchStart = useRef(null);
   const hasCentered = useRef(!!savedView.centered);
+  useEffect(() => {
+    const syncTheme = () => setDarkMap(getTheme() === 'dark');
+    const observer = new MutationObserver(syncTheme);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+    const media = window.matchMedia?.('(prefers-color-scheme: dark)');
+    media?.addEventListener?.('change', syncTheme);
+    return () => { observer.disconnect(); media?.removeEventListener?.('change', syncTheme); };
+  }, []);
   const enabled = game.settings?.locationSharingEnabled === true;
   const interval = Math.max(1, Number(game.settings?.locationUpdateIntervalMin) || 1);
   const positions = data.locations || [];
@@ -381,7 +390,8 @@ function MapTab({ data, me, onOpenSquare }) {
   const tiles = [...Array(tileRows)].flatMap((_, iy) => [...Array(tileCols)].map((_, ix) => {
     const x = tileX + ix - 1, rawY = tileY + iy - 1, n = 2 ** zoom;
     const y = Math.max(0, Math.min(n - 1, rawY));
-    return html`<img key=${`${zoom}/${((x % n) + n) % n}/${rawY}`} class="map-tile" draggable="false" src=${`https://tile.openstreetmap.org/${zoom}/${((x % n) + n) % n}/${((y % n) + n) % n}.png`}
+    const tileHost = ['a', 'b', 'c'][((x % 3) + 3) % 3];
+    return html`<img key=${`${zoom}/${((x % n) + n) % n}/${rawY}`} class="map-tile" draggable="false" src=${`https://tile-${tileHost}.openstreetmap.fr/hot/${zoom}/${((x % n) + n) % n}/${((y % n) + n) % n}.png`}
       onError=${() => setTilesFailed(true)} style=${`left:${x * 256 - left}px;top:${y * 256 - top}px`} />`;
   }));
   function xy(lat, lon) { const p = worldPoint(+lat, +lon, zoom); return { x: p.x - left, y: p.y - top }; }
@@ -456,7 +466,7 @@ function MapTab({ data, me, onOpenSquare }) {
     saveView({ center: { latitude: +own.latitude, longitude: +own.longitude }, zoom: 15, pan: { x: 0, y: 0 } });
   };
   return html`<section class="map-page">
-    <div class=${`map-canvas ${panStart.current ? 'panning' : ''}`} aria-label="Player and completed task map"
+    <div class=${`map-canvas ${darkMap ? 'dark-map' : ''} ${panStart.current ? 'panning' : ''}`} aria-label="Player and completed task map"
       onPointerDown=${(e) => {
         if (e.target.closest('.map-tools')) return;
         activePointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
