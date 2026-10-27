@@ -1,7 +1,7 @@
 import { ts } from './logic.js';
 
 const params = new URLSearchParams(location.search);
-export const MOCK = params.has('mock');
+export const MOCK = window.LOCKOUT_MODE === 'mock';
 // Test-only: lets several tabs on one device act as different players.
 const PROFILE = params.get('profile') || '';
 const key = (k) => `lockout:${PROFILE ? PROFILE + ':' : ''}${k}`;
@@ -21,6 +21,22 @@ export const store = {
     } catch {}
   },
 };
+
+const savedTheme = store.get('theme');
+if (savedTheme === 'light' || savedTheme === 'dark') document.documentElement.dataset.theme = savedTheme;
+
+export function getTheme() {
+  const saved = store.get('theme');
+  if (saved === 'light' || saved === 'dark') return saved;
+  return matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
+export function setTheme(theme) {
+  const next = theme === 'dark' ? 'dark' : 'light';
+  store.set('theme', next);
+  document.documentElement.dataset.theme = next;
+  return next;
+}
 
 export function uuid() {
   if (crypto.randomUUID) return crypto.randomUUID();
@@ -45,7 +61,7 @@ export function makeCode(len = 4) {
   const b = crypto.getRandomValues(new Uint8Array(len));
   return [...b].map((x) => CODE_ALPHABET[x % CODE_ALPHABET.length]).join('');
 }
-export const cleanCode = (s) => String(s || '').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 6);
+export const cleanCode = (s) => String(s || '').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 4);
 
 export function ago(t, now = Date.now()) {
   const s = Math.max(0, Math.round((now - ts(t)) / 1000));

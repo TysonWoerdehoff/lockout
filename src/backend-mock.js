@@ -1,9 +1,9 @@
-// In-browser fake backend for local testing (?mock). Shares state across tabs of one browser
+// In-browser fake backend for local testing. Shares state across tabs of one browser
 // via localStorage + BroadcastChannel; clips are kept in IndexedDB.
 import { uuid } from './util.js';
 
 const DBKEY = 'lockout-mock-db';
-const TABLES = ['games', 'players', 'submissions', 'contests', 'votes'];
+const TABLES = ['games', 'players', 'submissions', 'contests', 'votes', 'locations', 'messages'];
 const chan = new BroadcastChannel('lockout-mock');
 
 function load() {
@@ -37,11 +37,13 @@ function violates(d, table, row, selfId) {
 }
 
 const DEFAULTS = {
-  games: { status: 'lobby', settings: {}, challenges: [], team_names: [], board: null, pending_winner: null, winner: null },
+  games: { status: 'lobby', settings: {}, challenges: [], team_names: [], plans: {}, board: null, pending_winner: null, winner: null },
   players: { team: null },
-  submissions: { status: 'active', lockout: true, video_path: null, thumb_path: null },
+  submissions: { status: 'active', lockout: true, video_path: null, thumb_path: null, task_latitude: null, task_longitude: null },
   contests: { status: 'open' },
   votes: {},
+  locations: { visibility: 'team' },
+  messages: { player_name: '', body: '' },
 };
 
 // --- tiny IndexedDB file store ---
@@ -78,9 +80,15 @@ const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 export function mockBackend() {
   return {
     kind: 'mock',
-    async select(table, match) {
+    async select(table, match, options = {}) {
       await delay(15);
-      return load()[table].filter((r) => matches(r, match)).map((r) => ({ ...r }));
+      let rows = load()[table].filter((r) => matches(r, match));
+      if (options.orderBy) {
+        const direction = options.ascending === false ? -1 : 1;
+        rows = rows.sort((a, b) => direction * ((Date.parse(a[options.orderBy]) || 0) - (Date.parse(b[options.orderBy]) || 0) || String(a.id).localeCompare(String(b.id))));
+      }
+      if (Number.isInteger(options.limit) && options.limit > 0) rows = rows.slice(0, options.limit);
+      return rows.map((r) => ({ ...r }));
     },
     async insert(table, row) {
       await delay(20);
@@ -126,6 +134,12 @@ export function mockBackend() {
         d.submissions = d.submissions.filter((r) => !gameIds.has(r.game_id));
         d.contests = d.contests.filter((r) => !gameIds.has(r.game_id));
         d.votes = d.votes.filter((r) => !gameIds.has(r.game_id) && !submissionIds.has(r.submission_id) && !contestIds.has(r.contest_id));
+        d.locations = d.locations.filter((r) => !gameIds.has(r.game_id));
+        d.messages = d.messages.filter((r) => !gameIds.has(r.game_id));
+      }
+      if (table === 'players' && removed.length) {
+        const ids = new Set(removed.map((r) => r.id));
+        for (const message of d.messages) if (ids.has(message.player_id)) message.player_id = null;
       }
       save(d, table);
     },

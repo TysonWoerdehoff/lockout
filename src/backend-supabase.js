@@ -1,6 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 
-const TABLES = ['players', 'submissions', 'contests', 'votes'];
+const TABLES = ['players', 'submissions', 'contests', 'votes', 'locations', 'messages'];
 const BUCKET = 'clips';
 
 function applyMatch(q, match = {}) {
@@ -41,8 +41,11 @@ export function supabaseBackend({ supabaseUrl, supabaseKey }) {
   return {
     kind: 'supabase',
 
-    async select(table, match) {
-      const { data, error } = await applyMatch(sb.from(table).select('*'), match);
+    async select(table, match, options = {}) {
+      let query = applyMatch(sb.from(table).select('*'), match);
+      if (options.orderBy) query = query.order(options.orderBy, { ascending: options.ascending !== false });
+      if (Number.isInteger(options.limit) && options.limit > 0) query = query.limit(options.limit);
+      const { data, error } = await query;
       if (error) throw error;
       return data || [];
     },

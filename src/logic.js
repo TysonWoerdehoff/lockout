@@ -22,6 +22,9 @@ export const DEFAULT_SETTINGS = {
   win: { type: 'lines', n: 1 }, // 'lines' | 'squares' | 'majority'
   timeLimitMin: 0, // 0 = no limit
   reviewSecs: 30,
+  showTaskPins: true,
+  locationSharingEnabled: false,
+  locationUpdateIntervalMin: 1,
 };
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
@@ -41,6 +44,9 @@ export function normalizeSettings(s = {}) {
     win: { type, n },
     timeLimitMin: clamp(int(s.timeLimitMin, 0), 0, 600),
     reviewSecs: clamp(int(s.reviewSecs, 30), 0, 300),
+    showTaskPins: s.showTaskPins !== false,
+    locationSharingEnabled: s.locationSharingEnabled ?? int(s.opponentLocationIntervalMin, 0) > 0,
+    locationUpdateIntervalMin: clamp(int(s.locationUpdateIntervalMin, int(s.opponentLocationIntervalMin, 1) || 1), 1, 1440),
   };
 }
 

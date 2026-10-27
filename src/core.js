@@ -3,12 +3,12 @@ import { supabaseBackend } from './backend-supabase.js';
 import { mockBackend } from './backend-mock.js';
 import { localBackend } from './backend-local.js';
 import { createUploader } from './uploads.js';
-import { MOCK, store, clientId, makeCode, extFor, rememberGame } from './util.js';
+import { store, clientId, makeCode, extFor, rememberGame } from './util.js';
 import { DEFAULT_SETTINGS, normalizeSettings, makeBoard, fillTeams, leader, teamStats } from './logic.js';
 
 const cfg = window.LOCKOUT_CONFIG || {};
-const LOCAL = new URLSearchParams(location.search).has('local');
-export const backend = LOCAL ? localBackend() : MOCK ? mockBackend() : cfg.supabaseUrl && cfg.supabaseKey ? supabaseBackend(cfg) : null;
+const MODE = window.LOCKOUT_MODE || 'supabase';
+export const backend = MODE === 'local' ? localBackend() : MODE === 'mock' ? mockBackend() : cfg.supabaseUrl && cfg.supabaseKey ? supabaseBackend(cfg) : null;
 export const CLIENT_ID = clientId();
 
 // --- tiny event bus ---
@@ -104,9 +104,17 @@ export function useGameData(code) {
         const [players, submissions, contests, votes] = await Promise.all(
           ['players', 'submissions', 'contests', 'votes'].map((t) => backend.select(t, { game_id: gameId }))
         );
+        const messages = await backend.select('messages', { game_id: gameId }).catch((error) => {
+          console.warn('Game messages are unavailable; apply the latest setup.sql to enable chat.', error);
+          return [];
+        });
+        const locations = await backend.select('locations', { game_id: gameId }, { orderBy: 'created_at', ascending: false, limit: 10000 }).catch((error) => {
+          console.warn('Location data is unavailable; loading the game without map history.', error);
+          return [];
+        });
         if (!alive || my < applied) return;
         applied = my;
-        setState({ loading: false, game, players, submissions, contests, votes, online: true, at: Date.now() });
+        setState({ loading: false, game, players, submissions, contests, votes, locations, messages, online: true, at: Date.now() });
       } catch (e) {
         console.warn('fetch failed', e);
         if (alive) setState((s) => ({ ...s, loading: false, online: false, error: e.message || String(e) }));
@@ -218,7 +226,14 @@ export async function startGame(data, challenges, liveSettings) {
 export async function claimSquare(data, me, square, rec) {
   const { game } = data;
   const settings = normalizeSettings(game.settings);
-  const r = await backend.insert('submissions', { game_id: game.id, square, team: me.team, player_id: me.id, status: 'active', lockout: settings.lockout });
+  const latest = store.get(`map:last-location:${game.id}:${me.id}`);
+  const fresh = latest && Date.now() - latest.at <= 120000 && Number.isFinite(+latest.latitude) && Number.isFinite(+latest.longitude);
+  const location = game.settings?.locationSharingEnabled && fresh ? latest : null;
+  const r = await backend.insert('submissions', {
+    game_id: game.id, square, team: me.team, player_id: me.id, status: 'active', lockout: settings.lockout,
+    task_latitude: location ? +location.latitude : null,
+    task_longitude: location ? +location.longitude : null,
+  });
   if (r.conflict) return { conflict: true };
   const id = r.data.id;
   await uploader.enqueue({

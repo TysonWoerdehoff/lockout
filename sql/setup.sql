@@ -16,6 +16,7 @@ create table if not exists public.games (
   settings       jsonb not null default '{}'::jsonb,
   challenges     jsonb not null default '[]'::jsonb,
   team_names     jsonb not null default '[]'::jsonb,
+  plans          jsonb not null default '{}'::jsonb,
   board          jsonb,
   started_at     timestamptz,
   ends_at        timestamptz,
@@ -28,6 +29,7 @@ create table if not exists public.games (
   next_code      text,
   created_at     timestamptz not null default now()
 );
+alter table public.games add column if not exists plans jsonb not null default '{}'::jsonb;
 
 create table if not exists public.players (
   id         uuid primary key default gen_random_uuid(),
@@ -47,6 +49,8 @@ create table if not exists public.submissions (
   team       int not null,
   player_id  uuid references public.players(id) on delete set null,
   lockout    boolean not null default true,
+  task_latitude double precision check (task_latitude between -90 and 90),
+  task_longitude double precision check (task_longitude between -180 and 180),
   video_path text,
   thumb_path text,
   status     text not null default 'active' check (status in ('active','rejected')),
@@ -55,6 +59,8 @@ create table if not exists public.submissions (
 -- Every team may submit once per square. In lockout mode, the first team's claim
 -- also blocks submissions from all other teams.
 alter table public.submissions add column if not exists lockout boolean not null default true;
+alter table public.submissions add column if not exists task_latitude double precision;
+alter table public.submissions add column if not exists task_longitude double precision;
 drop index if exists public.submissions_one_owner;
 create unique index if not exists submissions_one_per_team on public.submissions (game_id, square, team) where status = 'active';
 create unique index if not exists submissions_one_owner on public.submissions (game_id, square) where status = 'active' and lockout;
@@ -83,12 +89,35 @@ create table if not exists public.votes (
 );
 create index if not exists votes_game on public.votes (game_id);
 
+create table if not exists public.locations (
+  id uuid primary key default gen_random_uuid(),
+  game_id uuid not null references public.games(id) on delete cascade,
+  player_id uuid not null references public.players(id) on delete cascade,
+  latitude double precision not null check (latitude between -90 and 90),
+  longitude double precision not null check (longitude between -180 and 180),
+  accuracy double precision,
+  visibility text not null default 'team' check (visibility in ('team','opponent')),
+  created_at timestamptz not null default now()
+);
+alter table public.locations add column if not exists visibility text not null default 'team';
+create index if not exists locations_game_player_time on public.locations (game_id, player_id, created_at);
+
+create table if not exists public.messages (
+  id uuid primary key default gen_random_uuid(),
+  game_id uuid not null references public.games(id) on delete cascade,
+  player_id uuid references public.players(id) on delete set null,
+  player_name text not null,
+  body text not null check (length(body) between 1 and 500),
+  created_at timestamptz not null default now()
+);
+create index if not exists messages_game_time on public.messages (game_id, created_at);
+
 -- ---------- Access (friends-only game: anyone with the app can play) ----------
 
 do $$
 declare t text;
 begin
-  foreach t in array array['games','players','submissions','contests','votes'] loop
+  foreach t in array array['games','players','submissions','contests','votes','locations','messages'] loop
     execute format('alter table public.%I enable row level security', t);
     execute format('drop policy if exists "lockout_all" on public.%I', t);
     execute format('create policy "lockout_all" on public.%I for all to anon, authenticated using (true) with check (true)', t);
@@ -101,7 +130,7 @@ end $$;
 do $$
 declare t text;
 begin
-  foreach t in array array['games','players','submissions','contests','votes'] loop
+  foreach t in array array['games','players','submissions','contests','votes','locations','messages'] loop
     if not exists (
       select 1 from pg_publication_tables
       where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = t

@@ -4,7 +4,7 @@ import { normalizeSettings, teamInfo, parseChallenges, describeWin, randomTeams,
 import { store, forgetGame } from './util.js';
 import { PACKS } from './packs.js';
 import { Icon } from './icons.js';
-import { Seg, Stepper, Sheet, TeamDot, ConfirmSheet } from './ui.js';
+import { Seg, Stepper, Sheet, TeamDot, ConfirmSheet, ThemeToggle } from './ui.js';
 import { RULES } from './home.js';
 
 export function shareInvite(game) {
@@ -166,6 +166,7 @@ export function Lobby({ data, me, refresh }) {
     html`<div class="dock">
       <div class="waiting"><span class="pulse"></span> Waiting for ${host?.name || 'the host'} to start…</div>
     </div>`}
+    <${ThemeToggle} className="theme-dock" />
     <${Sheet} open=${rules} onClose=${() => setRules(false)} title="How to play">${RULES}</${Sheet}>
     <${ConfirmSheet} open=${!!confirmAction} onClose=${() => !confirmBusy && setConfirmAction(null)}
       onConfirm=${confirmActionNow} busy=${confirmBusy} danger=${confirmAction !== 'host'}
@@ -186,6 +187,8 @@ function SettingsCard({ settings, isHost, save }) {
         <div><dt>To win</dt><dd>${describeWin(settings)}</dd></div>
         <div><dt>Time limit</dt><dd>${settings.timeLimitMin ? `${settings.timeLimitMin} min (most squares wins)` : 'None'}</dd></div>
         <div><dt>Review window</dt><dd>${settings.reviewSecs}s</dd></div>
+        <div><dt>Completed task pins</dt><dd>${settings.showTaskPins ? 'Shown' : 'Hidden'}</dd></div>
+        <div><dt>Location sharing</dt><dd>${settings.locationSharingEnabled ? `Every ${settings.locationUpdateIntervalMin} min` : 'Off'}</dd></div>
       </dl>
     </section>`;
   }
@@ -225,6 +228,21 @@ function SettingsCard({ settings, isHost, save }) {
       <span class="label">Review window before a win counts</span>
       <${Seg} value=${settings.reviewSecs} onChange=${(v) => save({ reviewSecs: v })}
         options=${[{ value: 15, label: '15s' }, { value: 30, label: '30s' }, { value: 60, label: '60s' }, { value: 120, label: '2m' }]} />
+    </div>
+    <div class="field">
+      <span class="label">Completed task pins</span>
+      <${Seg} value=${settings.showTaskPins} onChange=${(v) => save({ showTaskPins: v })}
+        options=${[{ value: true, label: 'Show' }, { value: false, label: 'Hide' }]} />
+    </div>
+    <div class="field">
+      <span class="label">Location sharing for this game</span>
+      <${Seg} value=${settings.locationSharingEnabled} onChange=${(v) => save({ locationSharingEnabled: v })}
+        options=${[{ value: true, label: 'On' }, { value: false, label: 'Off' }]} />
+      ${settings.locationSharingEnabled && html`<label class="location-interval">Update interval in minutes
+        <input type="number" min="1" max="1440" step="1" value=${settings.locationUpdateIntervalMin}
+          onChange=${(e) => save({ locationUpdateIntervalMin: Math.max(1, Math.min(1440, Math.round(Number(e.currentTarget.value) || 1))) })} />
+      </label>`}
+      <p class="hint">When enabled, players are asked for browser location permission. Teammate locations update about every 10 seconds; opponents update at the interval above.</p>
     </div>
   </section>`;
 }

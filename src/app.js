@@ -102,6 +102,6 @@ function GameRoot({ code }) {
 
 render(html`<${App} />`, document.getElementById('app'));
 
-if ('serviceWorker' in navigator && !MOCK && location.protocol === 'https:') {
+if ('serviceWorker' in navigator && !MOCK && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
   navigator.serviceWorker.register('./sw.js').catch(() => {});
 }

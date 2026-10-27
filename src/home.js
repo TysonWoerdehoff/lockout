@@ -2,7 +2,7 @@ import { html, useState, useEffect } from './h.js';
 import { backend, createGame, joinGame, reclaimPlayer, go, toast } from './core.js';
 import { store, cleanCode, recentGames, isIOS, isStandalone, MOCK } from './util.js';
 import { Icon } from './icons.js';
-import { Sheet } from './ui.js';
+import { Sheet, ThemeToggle } from './ui.js';
 
 let deferredPrompt = null;
 addEventListener('beforeinstallprompt', (e) => {
@@ -40,7 +40,7 @@ export function SetupNeeded() {
     <${Logo} size=${64} />
     <h1 class="display">Lockout</h1>
     <p class="muted">This copy isn’t connected to a database yet. Add your Supabase URL and key to <code>config.js</code>.</p>
-    <a class="btn" href="?mock">Try the offline demo</a>
+    <p class="muted">For an offline demo, start the app with <code>npm run serve -- mock</code>.</p>
   </main>`;
 }
 
@@ -100,7 +100,7 @@ export function Home() {
   async function join() {
     const c = cleanCode(code);
     if (!cleanName) return toast('Enter your name first');
-    if (c.length < 4) return toast('Enter the 4-letter game code');
+    if (!/^[A-Z]{4}$/.test(c)) return toast('Enter exactly 4 letters for the game code');
     saveName();
     setBusy('join');
     try {
@@ -113,6 +113,26 @@ export function Home() {
     } finally {
       setBusy(null);
     }
+  }
+
+  function guardCodeInput(e) {
+    if (e.inputType?.startsWith('delete') || !e.data) return;
+    if (!/^[a-z]+$/i.test(e.data)) { e.preventDefault(); return; }
+    const input = e.currentTarget;
+    const selected = (input.selectionEnd ?? input.value.length) - (input.selectionStart ?? input.value.length);
+    if (input.value.length - selected + e.data.length > 4) e.preventDefault();
+  }
+
+  function pasteCode(e) {
+    const pasted = e.clipboardData?.getData('text') || '';
+    if (!/^[a-z]{1,4}$/i.test(pasted)) { e.preventDefault(); return; }
+    const input = e.currentTarget;
+    const start = input.selectionStart ?? input.value.length;
+    const end = input.selectionEnd ?? start;
+    const next = input.value.slice(0, start) + pasted.toUpperCase() + input.value.slice(end);
+    if (next.length > 4) { e.preventDefault(); return; }
+    e.preventDefault();
+    setCode(next);
   }
 
   async function install() {
@@ -139,8 +159,9 @@ export function Home() {
       <button class="btn big" onClick=${create} disabled=${!!busy}>${busy === 'create' ? 'Creating…' : 'Create a game'}</button>
       <div class="or"><span>or join one</span></div>
       <div class="row">
-        <input class="input code-input" placeholder="CODE" value=${code} maxlength="6" autocapitalize="characters" autocomplete="off" spellcheck="false"
-          onInput=${(e) => setCode(cleanCode(e.currentTarget.value))} onKeyDown=${(e) => e.key === 'Enter' && join()} />
+        <input class="input code-input" type="text" inputmode="text" placeholder="CODE" value=${code} maxlength="4" pattern="[A-Za-z]{4}" autocapitalize="characters" autocomplete="off" spellcheck="false"
+          onBeforeInput=${guardCodeInput} onPaste=${pasteCode} onInput=${(e) => setCode(cleanCode(e.currentTarget.value))}
+          onKeyDown=${(e) => { if (e.key.length === 1 && !/^[a-z]$/i.test(e.key)) e.preventDefault(); else if (e.key === 'Enter') join(); }} />
         <button class="btn" onClick=${join} disabled=${!!busy}>${busy === 'join' ? '…' : 'Join'}</button>
       </div>
     </section>
@@ -169,6 +190,7 @@ export function Home() {
     </section>`}
 
     <button class="link-btn" onClick=${() => setRulesOpen(true)}>How to play</button>
+    <${ThemeToggle} className="theme-dock" />
 
     <${Sheet} open=${iosHelp} onClose=${() => setIosHelp(false)} title="Add to Home Screen">
       ${isIOS()

@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync, statSync, createReadStream } from 'node:fs';
 import { dirname, extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import webPush from 'web-push';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const WEB = resolve(ROOT, process.env.WEB_ROOT || 'docs');
@@ -11,22 +12,35 @@ const DB_FILE = join(DATA, 'db.json');
 const CLIPS = join(DATA, 'clips');
 const HOST = process.env.HOST || '0.0.0.0';
 const PORT = Number(process.env.PORT || 8787);
-const TABLES = new Set(['games', 'players', 'submissions', 'contests', 'votes']);
+const MODE = ['supabase', 'local', 'mock'].includes(process.env.LOCKOUT_MODE) ? process.env.LOCKOUT_MODE : 'supabase';
+const TABLES = new Set(['games', 'players', 'submissions', 'contests', 'votes', 'locations', 'messages']);
 const MAX_BODY = 50 * 1024 * 1024;
 const listeners = new Set();
 let writeNumber = 0;
+let vapidKeys = null;
 
-mkdirSync(CLIPS, { recursive: true });
-if (!existsSync(DB_FILE)) saveDb(emptyDb());
+if (MODE === 'local') {
+  mkdirSync(CLIPS, { recursive: true });
+  if (!existsSync(DB_FILE)) saveDb(emptyDb());
+  const keyFile = join(DATA, 'vapid-keys.json');
+  if (existsSync(keyFile)) vapidKeys = JSON.parse(readFileSync(keyFile, 'utf8'));
+  else {
+    vapidKeys = webPush.generateVAPIDKeys();
+    writeFileSync(keyFile, JSON.stringify(vapidKeys, null, 2), { mode: 0o600 });
+  }
+  webPush.setVapidDetails(process.env.VAPID_SUBJECT || 'mailto:lockout@example.com', vapidKeys.publicKey, vapidKeys.privateKey);
+}
 
 function emptyDb() {
-  return { games: [], players: [], submissions: [], contests: [], votes: [] };
+  return { games: [], players: [], submissions: [], contests: [], votes: [], locations: [], messages: [], push_subscriptions: [], push_reminders: [] };
 }
 
 function readDb() {
   try {
     const db = JSON.parse(readFileSync(DB_FILE, 'utf8'));
     for (const table of TABLES) db[table] ||= [];
+    db.push_subscriptions ||= [];
+    db.push_reminders ||= [];
     return db;
   } catch (error) {
     if (error.code === 'ENOENT') return emptyDb();
@@ -58,11 +72,13 @@ function conflict(table, row, db, self = null) {
 
 function defaults(table) {
   return {
-    games: { status: 'lobby', settings: {}, challenges: [], team_names: [], board: null, pending_winner: null, winner: null },
+    games: { status: 'lobby', settings: {}, challenges: [], team_names: [], plans: {}, board: null, pending_winner: null, winner: null },
     players: { team: null },
-    submissions: { status: 'active', lockout: true, video_path: null, thumb_path: null },
+    submissions: { status: 'active', lockout: true, video_path: null, thumb_path: null, task_latitude: null, task_longitude: null },
     contests: { status: 'open' },
     votes: {},
+    locations: { visibility: 'team' },
+    messages: { player_name: '', body: '' },
   }[table];
 }
 
@@ -72,6 +88,8 @@ function checkRefs(table, row, db) {
   if (table === 'submissions' && row.player_id && !has('players', row.player_id)) return 'Player does not exist';
   if (table === 'contests' && !has('submissions', row.submission_id)) return 'Submission does not exist';
   if (table === 'votes' && (!has('contests', row.contest_id) || !has('players', row.player_id))) return 'Contest or player does not exist';
+  if (table === 'locations' && row.player_id && !has('players', row.player_id)) return 'Player does not exist';
+  if (table === 'messages' && row.player_id && !has('players', row.player_id)) return 'Player does not exist';
   return null;
 }
 
@@ -86,6 +104,21 @@ function json(response, status, value) {
   const body = JSON.stringify(value);
   response.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'content-length': Buffer.byteLength(body), 'cache-control': 'no-store' });
   response.end(body);
+}
+
+async function sendGamePush(gameId, payload, exceptPlayerId = null) {
+  const db = readDb();
+  const targets = db.push_subscriptions.filter((sub) => sub.game_id === gameId && sub.player_id !== exceptPlayerId);
+  await Promise.allSettled(targets.map(async (sub) => {
+    try { await webPush.sendNotification(sub.subscription, JSON.stringify(payload), { TTL: 3600 }); }
+    catch (error) {
+      if ([404, 410].includes(error.statusCode)) {
+        const current = readDb();
+        current.push_subscriptions = current.push_subscriptions.filter((row) => row.id !== sub.id);
+        saveDb(current);
+      } else console.warn('Push delivery failed:', error.statusCode || error.message);
+    }
+  }));
 }
 
 async function bodyBuffer(request, max = MAX_BODY) {
@@ -107,6 +140,27 @@ function safeClipPath(relative) {
 
 async function handleApi(request, response, url) {
   const parts = url.pathname.split('/').filter(Boolean);
+  if (parts[1] === 'push' && MODE === 'local') {
+    if (parts[2] === 'key' && request.method === 'GET') return json(response, 200, { publicKey: vapidKeys.publicKey });
+    if (parts[2] === 'subscribe' && request.method === 'POST') {
+      const { game_id, player_id, subscription } = JSON.parse((await bodyBuffer(request, 256 * 1024)).toString('utf8'));
+      const db = readDb();
+      if (!db.games.some((game) => game.id === game_id) || !db.players.some((player) => player.id === player_id && player.game_id === game_id)) return json(response, 404, { error: 'Game or player not found' });
+      if (!subscription?.endpoint || !subscription?.keys?.p256dh || !subscription?.keys?.auth) return json(response, 400, { error: 'Invalid push subscription' });
+      const old = db.push_subscriptions.find((row) => row.subscription.endpoint === subscription.endpoint);
+      if (old) Object.assign(old, { game_id, player_id, subscription });
+      else db.push_subscriptions.push({ id: randomUUID(), game_id, player_id, subscription, created_at: new Date().toISOString() });
+      saveDb(db);
+      return json(response, 200, { ok: true });
+    }
+    if (parts[2] === 'unsubscribe' && request.method === 'POST') {
+      const { endpoint } = JSON.parse((await bodyBuffer(request, 16 * 1024)).toString('utf8'));
+      const db = readDb();
+      db.push_subscriptions = db.push_subscriptions.filter((row) => row.subscription.endpoint !== endpoint);
+      saveDb(db);
+      return json(response, 200, { ok: true });
+    }
+  }
   if (parts[1] === 'events' && request.method === 'GET') {
     response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache, no-transform', connection: 'keep-alive' });
     response.write(`data: ${JSON.stringify({ type: 'status', status: 'SUBSCRIBED' })}\n\n`);
@@ -153,6 +207,7 @@ async function handleApi(request, response, url) {
   const table = parts[1];
   if (!TABLES.has(table)) return json(response, 404, { error: 'Unknown API route' });
   const match = JSON.parse(url.searchParams.get('match') || '{}');
+  const options = JSON.parse(url.searchParams.get('options') || '{}');
   const db = readDb();
 
   if (parts[2] === 'upsert' && request.method === 'POST') {
@@ -172,7 +227,15 @@ async function handleApi(request, response, url) {
     return json(response, 200, { ok: true });
   }
 
-  if (request.method === 'GET') return json(response, 200, db[table].filter((row) => matches(row, match)));
+  if (request.method === 'GET') {
+    let rows = db[table].filter((row) => matches(row, match));
+    if (options.orderBy) {
+      const direction = options.ascending === false ? -1 : 1;
+      rows.sort((a, b) => direction * ((Date.parse(a[options.orderBy]) || 0) - (Date.parse(b[options.orderBy]) || 0) || String(a.id).localeCompare(String(b.id))));
+    }
+    if (Number.isInteger(options.limit) && options.limit > 0) rows = rows.slice(0, options.limit);
+    return json(response, 200, rows);
+  }
   if (request.method === 'POST') {
     const row = JSON.parse((await bodyBuffer(request, 1024 * 1024)).toString('utf8'));
     const full = { ...defaults(table), ...row, ...(table === 'votes' ? {} : { id: row.id || randomUUID() }), created_at: row.created_at || new Date().toISOString() };
@@ -183,6 +246,12 @@ async function handleApi(request, response, url) {
     db[table].push(full);
     saveDb(db);
     notify(table, full);
+    if (table === 'submissions' && full.status === 'active') {
+      const game = db.games.find((row) => row.id === full.game_id);
+      const player = db.players.find((row) => row.id === full.player_id);
+      const task = game?.board?.[full.square] || 'a task';
+      void sendGamePush(full.game_id, { title: 'Task completed', body: `${player?.name || 'A player'} completed “${task}”`, url: `/#/g/${game?.code || ''}` }, full.player_id);
+    }
     return json(response, 201, full);
   }
   if (request.method === 'PATCH') {
@@ -215,11 +284,18 @@ async function handleApi(request, response, url) {
       db.submissions = db.submissions.filter((row) => !gameIds.has(row.game_id));
       db.contests = db.contests.filter((row) => !gameIds.has(row.game_id));
       db.votes = db.votes.filter((row) => !gameIds.has(row.game_id) && !submissionIds.has(row.submission_id) && !contestIds.has(row.contest_id));
+      db.locations = db.locations.filter((row) => !gameIds.has(row.game_id));
+      db.messages = db.messages.filter((row) => !gameIds.has(row.game_id));
+      db.push_subscriptions = db.push_subscriptions.filter((row) => !gameIds.has(row.game_id));
+      db.push_reminders = db.push_reminders.filter((id) => !gameIds.has(id));
       for (const row of removed) notify('games', row);
     }
     if (table === 'players' && removed.length) {
       const ids = new Set(removed.map((row) => row.id));
       db.votes = db.votes.filter((row) => !ids.has(row.player_id));
+      db.locations = db.locations.filter((row) => !ids.has(row.player_id));
+      db.push_subscriptions = db.push_subscriptions.filter((row) => !ids.has(row.player_id));
+      for (const row of db.messages) if (ids.has(row.player_id)) row.player_id = null;
     }
     if (removed.length) {
       saveDb(db);
@@ -236,25 +312,60 @@ const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; ch
 const server = createServer(async (request, response) => {
   try {
     const url = new URL(request.url, `http://${request.headers.host || 'localhost'}`);
-    if (url.pathname === '/' && !['local', 'mock', 'supabase'].some((mode) => url.searchParams.has(mode))) {
+    if (url.pathname === '/') {
       const query = new URLSearchParams(url.searchParams);
-      query.set('local', '');
-      response.writeHead(302, { location: `/?${query.toString()}` });
-      return response.end();
+      let removedMode = false;
+      for (const mode of ['local', 'mock', 'supabase']) {
+        if (query.has(mode)) { query.delete(mode); removedMode = true; }
+      }
+      if (removedMode) {
+        const suffix = query.toString();
+        response.writeHead(302, { location: `/${suffix ? `?${suffix}` : ''}` });
+        return response.end();
+      }
     }
-    if (url.pathname.startsWith('/api/')) return await handleApi(request, response, url);
+    if (url.pathname.startsWith('/api/')) {
+      if (MODE !== 'local') return json(response, 404, { error: 'Local data APIs are disabled in this serve mode.' });
+      return await handleApi(request, response, url);
+    }
     if (!['GET', 'HEAD'].includes(request.method)) return json(response, 405, { error: 'Method not allowed' });
     const relative = decodeURIComponent(url.pathname === '/' ? '/index.html' : url.pathname);
     const file = resolve(WEB, `.${relative}`);
     if (file !== WEB && !file.startsWith(`${WEB}${sep}`)) return json(response, 403, { error: 'Forbidden' });
     if (!existsSync(file) || !statSync(file).isFile()) return json(response, 404, { error: 'Not found. Run npm run build first.' });
-    const body = request.method === 'HEAD' ? null : readFileSync(file);
-    response.writeHead(200, { 'content-type': TYPES[extname(file).toLowerCase()] || 'application/octet-stream', 'content-length': statSync(file).size, 'cache-control': 'no-cache' });
-    response.end(body);
+    let body = readFileSync(file);
+    if (extname(file).toLowerCase() === '.html') {
+      const html = body.toString('utf8').replace('</head>', `<script>window.LOCKOUT_MODE=${JSON.stringify(MODE)};</script>\n</head>`);
+      body = Buffer.from(html);
+    }
+    response.writeHead(200, { 'content-type': TYPES[extname(file).toLowerCase()] || 'application/octet-stream', 'content-length': body.length, 'cache-control': 'no-cache' });
+    response.end(request.method === 'HEAD' ? undefined : body);
   } catch (error) {
     if (!response.headersSent) json(response, error.status || 500, { error: error.message || 'Internal server error' });
     else response.destroy(error);
   }
 });
 
-server.listen(PORT, HOST, () => console.log(`Lockout local server: http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}\nData: ${DATA}\nOpen http://localhost:${PORT}/?local`));
+server.listen(PORT, HOST, () => {
+  const address = `http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}`;
+  console.log(`Lockout serve mode: ${MODE}\nOpen ${address}${MODE === 'local' ? `\nData: ${DATA}` : ''}`);
+});
+
+if (MODE === 'local') {
+  const reminderTimer = setInterval(() => {
+    try {
+      const db = readDb();
+      const now = Date.now();
+      const due = db.games.filter((game) => {
+        const remaining = Date.parse(game.ends_at) - now;
+        const duration = Date.parse(game.ends_at) - Date.parse(game.started_at);
+        return game.status === 'active' && game.ends_at && Number.isFinite(duration) && duration >= 5 * 60_000 && remaining > 0 && remaining <= 5 * 60_000 && !db.push_reminders.includes(game.id);
+      });
+      if (!due.length) return;
+      for (const game of due) db.push_reminders.push(game.id);
+      saveDb(db);
+      for (const game of due) void sendGamePush(game.id, { title: '5 minutes left', body: `Game ${game.code} ends in 5 minutes.`, url: `/#/g/${game.code}` });
+    } catch (error) { console.warn('Push reminder check failed:', error.message); }
+  }, 15_000);
+  reminderTimer.unref();
+}

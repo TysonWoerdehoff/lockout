@@ -13,7 +13,8 @@ It's an installable web app (Add to Home Screen on iPhone or Android). Use Supab
 - **Win conditions:** N bingos, N squares, or majority of the board — plus optional time limit (most squares wins)
 - **Video proof** for every square: in-app camera (auto-compressed 720p, max 60s) or upload from the camera roll
 - **Lockout toggle:** when on, the first team owns the square; when off, every team may submit once and challenge other teams' clips
-- **Live scoreboard, feed, and notifications** for every claim
+- **Live scoreboard, activity feed, in-game text chat, and notifications** for every claim
+- **Push alerts in local server mode** for task completions and when five minutes remain (after enabling notifications on each device)
 - **Contests:** challenge any clip; players on other teams vote, majority wins, ties go to the claimer, auto-decides after 2 minutes; host can override
 - **Review window:** when a team hits the goal, the game pauses so others can check their clips before the win counts
 - **Spotty-wifi safe:** clips are saved on the phone and upload in the background with automatic retries
@@ -30,20 +31,25 @@ It's an installable web app (Add to Home Screen on iPhone or Android). Use Supab
 
 Free-tier notes: 1 GB of storage and 5 GB/month of bandwidth is plenty for a few games a month (clips are ~2–6 MB each). Supabase pauses projects after a week with no activity — hit **Restore** in the dashboard before game day if it's been a while.
 
-If you already set up Supabase before this change, re-run [`sql/setup.sql`](sql/setup.sql) once to add the per-team submission index and `lockout` field.
+If you already set up Supabase before these changes, re-run [`sql/setup.sql`](sql/setup.sql) to add the per-team submission index, task coordinates, location history and visibility fields, in-game chat table, and `lockout` field.
 
-## Local server (no Supabase)
+## Run the app
 
-The local server stores game records in `data/local/db.json`, video clips in `data/local/clips/`, and sends live updates to connected browsers. That folder is ignored by Git and stays on the computer running the server.
+`npm run serve` builds the app and starts one selected mode on port 8787. With no mode argument, it defaults to **Supabase** and uses the credentials in [`public/config.js`](public/config.js).
 
 ```
 npm install
-npm run serve      # builds the app, then starts the local server on port 8787
+npm run serve                  # Supabase (default)
+npm run serve -- supabase      # explicitly select Supabase
+npm run serve -- local         # local JSON database and clip files
+npm run serve -- mock          # in-browser mock backend
 ```
 
-Open `http://localhost:8787/`; the local server selects the local backend by default. To play from another browser or device on the same trusted network, open `http://<computer-LAN-IP>:8787/`; keep the server running on the computer. Add `?supabase` to explicitly use the configured Supabase backend. The server binds to the local network so clients can connect. Do not expose this development server to the public internet. Browsers generally require HTTPS to access a phone camera from a LAN address; video uploads still work over local HTTP.
+Open `http://localhost:8787/`. Stop the running server before starting another mode; each server process runs only the selected backend. For local mode, game records are stored in `data/local/db.json` and clips in `data/local/clips/`. This folder is ignored by Git and stays on the computer running the server. For mock mode, game data is kept in the browser and is useful for quick demos; it does not sync across different devices.
 
-The local backend implements the app's game tables, conflict checks, live updates, and clip storage using only Node's built-in modules. It does not call Supabase. `?mock` remains available for a quick single-browser demo. The server has no user authentication, so use it only on a trusted network.
+Local mode binds to the local network so other browsers and devices can connect at `http://<computer-LAN-IP>:8787/`; keep the server running on the computer. It implements the game tables, conflict checks, live updates, and clip storage locally and does not call Supabase. The development server has no user authentication, so use it only on a trusted network and do not expose it to the public internet. iPhone location and camera access over a LAN address generally require HTTPS; local video uploads still work over HTTP.
+
+In local mode, open an active game, choose **Enable push notifications** in the game menu, and allow notifications. The server sends task-completion alerts and one five-minute warning for games with a time limit. Push requires a secure context: `localhost` works over HTTP, while phones connecting over your LAN need HTTPS. The VAPID keys are generated once and saved in `data/local/vapid-keys.json`; set `VAPID_SUBJECT` to a contact email or URL for deployments. Push delivery requires the local server to remain running. Supabase mode currently keeps its existing in-app alerts and does not send background push notifications.
 
 ## Development
 
@@ -51,10 +57,12 @@ The local backend implements the app's game tables, conflict checks, live update
 npm install
 npm run build      # → docs/
 npm test           # game-rule unit tests
-npm run serve      # builds and runs the local app at http://localhost:8787/
+npm run serve      # builds and runs Supabase mode by default
+npm run serve -- local
+npm run serve -- mock
 ```
 
-`?mock` runs the whole game in the browser with a fake backend — open several tabs with `?mock&profile=alice`, `?mock&profile=bob`, … to play against yourself. The local server uses its shared backend by default, so separate browsers and LAN devices see the same game. `test/e2e.py` drives a 4-player game end to end with Playwright.
+Mock mode uses browser storage. Start it with `npm run serve -- mock`, then open multiple tabs with different profiles (for example `?profile=alice` and `?profile=bob`). The `serve` command runs only one backend mode and defaults to Supabase. `test/e2e.py` drives a 4-player game end to end with Playwright.
 
 ### Code map
 
@@ -64,7 +72,7 @@ npm run serve      # builds and runs the local app at http://localhost:8787/
 | `src/core.js` | Backend selection, live data hook, all game actions |
 | `src/backend-supabase.js` | Supabase tables, realtime, storage uploads |
 | `src/backend-local.js`, `server.mjs` | Local HTTP API, persistent JSON database, live events, and clip files |
-| `src/backend-mock.js` | In-browser fake backend for `?mock` |
+| `src/backend-mock.js` | In-browser fake backend for mock serve mode |
 | `src/uploads.js` | Durable background upload queue (IndexedDB) |
 | `src/recorder.js` | In-app camera recorder + video picker |
 | `src/home.js`, `lobby.js`, `game.js`, `recap.js` | Screens |

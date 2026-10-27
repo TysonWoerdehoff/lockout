@@ -14,12 +14,24 @@ async function request(path, options = {}) {
   return response.json();
 }
 
-const query = (match = {}) => `?match=${encodeURIComponent(JSON.stringify(match))}`;
+const query = (match = {}, options = {}) => `?match=${encodeURIComponent(JSON.stringify(match))}&options=${encodeURIComponent(JSON.stringify(options))}`;
 
 export function localBackend() {
   return {
     kind: 'local',
-    select: (table, match) => request(`/${table}${query(match)}`),
+    async enablePush(gameId, playerId) {
+      if (!('Notification' in window) || !('serviceWorker' in navigator) || !('PushManager' in window)) throw new Error('Push notifications are not supported by this browser.');
+      const permission = Notification.permission === 'granted' ? 'granted' : await Notification.requestPermission();
+      if (permission !== 'granted') throw new Error('Allow notifications in your browser settings to enable push alerts.');
+      const registration = await navigator.serviceWorker.ready;
+      const keyResponse = await fetch(`${API}/push/key`, { cache: 'no-store' });
+      if (!keyResponse.ok) throw new Error('Could not connect to the local push service.');
+      const { publicKey } = await keyResponse.json();
+      const subscription = await registration.pushManager.getSubscription() || await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: decodeKey(publicKey) });
+      await request('/push/subscribe', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ game_id: gameId, player_id: playerId, subscription: subscription.toJSON() }) });
+      return true;
+    },
+    select: (table, match, options) => request(`/${table}${query(match, options)}`),
     insert: async (table, row) => {
       try { return { data: await request(`/${table}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(row) }) }; }
       catch (error) { if (error.status === 409) return { conflict: true, error }; throw error; }
@@ -54,4 +66,10 @@ export function localBackend() {
     mediaUrl: (path) => path ? `${API}/storage?path=${encodeURIComponent(path)}` : null,
     downloadUrl: (path, filename) => path ? `${API}/storage?path=${encodeURIComponent(path)}${filename ? `&download=${encodeURIComponent(filename)}` : ''}` : null,
   };
+}
+
+function decodeKey(value) {
+  const padded = `${value}${'='.repeat((4 - value.length % 4) % 4)}`;
+  const raw = atob(padded.replace(/-/g, '+').replace(/_/g, '/'));
+  return Uint8Array.from(raw, (char) => char.charCodeAt(0));
 }

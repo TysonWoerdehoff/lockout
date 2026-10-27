@@ -14,6 +14,26 @@ self.addEventListener('activate', (e) => {
   );
 });
 
+self.addEventListener('push', (e) => {
+  let payload = {};
+  try { payload = e.data?.json() || {}; } catch {}
+  e.waitUntil(self.registration.showNotification(payload.title || 'Lockout', {
+    body: payload.body || 'There is an update in your game.',
+    icon: './icons/icon-192.png',
+    badge: './icons/icon-192.png',
+    data: { url: payload.url || '/' },
+  }));
+});
+
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  const target = new URL(e.notification.data?.url || '/', self.location.origin).href;
+  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
+    const existing = clients.find((client) => new URL(client.url).origin === self.location.origin);
+    return existing ? existing.navigate(target).then(() => existing.focus()) : self.clients.openWindow(target);
+  }));
+});
+
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== location.origin) return;

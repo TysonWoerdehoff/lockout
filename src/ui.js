@@ -1,6 +1,14 @@
 import { html, useState, useEffect, useRef } from './h.js';
 import { bus, useMedia, backend } from './core.js';
 import { Icon } from './icons.js';
+import { getTheme, setTheme } from './util.js';
+
+export function ThemeToggle({ className = '' }) {
+  const [theme, updateTheme] = useState(getTheme);
+  const next = theme === 'dark' ? 'light' : 'dark';
+  return html`<button class=${`theme-toggle ${className}`} type="button" aria-label=${`Switch to ${next} mode`} title=${`Switch to ${next} mode`}
+    onClick=${() => updateTheme(setTheme(next))}><${theme === 'dark' ? Icon.sun : Icon.moon} size=${17} /></button>`;
+}
 
 export function Sheet({ open, onClose, children, title, tall }) {
   useEffect(() => {
